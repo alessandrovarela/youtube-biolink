@@ -25,9 +25,9 @@ The product ships **exactly 3 user-selectable themes**, persisted on the profile
 
 - **`light`** — clean white background, dark ink, neutral blue accent. Default.
 - **`dark`** — dark slate background, soft white ink, same accent family.
-- **`accent`** — light cream background, dark ink, vibrant accent (warm amber) — meant to read as "branded".
+- **`accent`** — warm amber background (`#EDD3A9`), dark ink, vibrant accent — meant to read as "branded". Cards/buttons use `--color-surface: #FFFFFF` for contrast against the colored canvas.
 
-All three derive from the same token surface: `--color-bg`, `--color-fg`, `--color-muted`, `--color-accent`, `--color-accent-fg`, `--color-border`. Custom themes / color picker / fonts / CSS overrides are explicitly **out of scope** for the MVP (Phase 2 territory).
+All three derive from the same token surface: `--color-bg`, `--color-fg`, `--color-muted`, `--color-accent`, `--color-accent-fg`, `--color-border`, `--color-surface`. In light/dark, `--color-surface` equals `--color-bg`; in themed canvases (accent) it diverges to keep elevated elements (cards, link buttons) readable. Custom themes / color picker / fonts / CSS overrides are explicitly **out of scope** for the MVP (Phase 2 territory).
 
 ---
 

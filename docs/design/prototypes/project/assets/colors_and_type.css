@@ -19,6 +19,10 @@
   --color-accent-fg: #FFFFFF;
   --color-accent-soft: #DBEAFE;
 
+  /* Elevated surface (cards, buttons over canvas).
+     Equals --color-bg in light/dark; differs in themed canvases for contrast. */
+  --color-surface: var(--color-bg);
+
   /* Status (constant across themes) */
   --color-success: #16A34A;
   --color-warning: #D97706;
@@ -86,7 +90,7 @@ html.theme-dark {
 }
 
 html.theme-accent {
-  --color-bg: #FAF7F2;
+  --color-bg: #EDD3A9;
   --color-fg: #1A1410;
   --color-muted: #F0E9DD;
   --color-muted-fg: #5C4F42;
@@ -94,6 +98,7 @@ html.theme-accent {
   --color-accent: #D97757;
   --color-accent-fg: #FFFFFF;
   --color-accent-soft: #F4DDD0;
+  --color-surface: #FFFFFF;
 }
 
 /* ----- Semantic element styles ----- */

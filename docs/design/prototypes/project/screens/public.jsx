@@ -15,7 +15,7 @@ function PublicProfileScreen({ profile, links }) {
   { id: "5", title: "Discord da comunidade" }];
 
   return (
-    <main className="public-page" style={{ backgroundColor: "rgb(237, 211, 169)" }}>
+    <main className="public-page">
       <Avatar src={p.avatar_url} name={p.display_name} size={92} />
       <h1 className="public-name">{p.display_name}</h1>
       <div className="public-handle">@{p.username}</div>
