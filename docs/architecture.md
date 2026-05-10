@@ -1,9 +1,9 @@
 # youtube-biolink Fullstack Architecture Document
 
-> **Status:** Draft v0.2 (simplificação didática)
+> **Status:** Approved v1.0
 > **Autor:** Aria (Architect)
-> **Data:** 2026-04-16
-> **Insumo:** `docs/prd.md` v1.0 + `docs/brief.md` v1.0
+> **Data:** 2026-05-09
+> **Insumo:** `docs/prd.md` v1.1 + `docs/brief.md` v1.0 + `docs/frontend-spec.md` v1.0 (2026-05-09)
 > **Modo de geração:** YOLO, output monolítico
 
 ---
@@ -25,6 +25,7 @@ O documento assume um **princípio orientador explícito**: *simplificar camadas
 | 2026-04-16 | 0.1     | Draft inicial: resolve H1–H4, stack + padrões completos incluindo RLS, middleware edge, rate-limit Supabase, logging wrapper. | Aria (Architect) |
 | 2026-04-16 | 0.2     | **Simplificação didática** a pedido do owner: remove RLS, middleware edge, rate-limit, logging estruturado, split ui/features, zod. Paradigma moderno preservado. | Aria (Architect) |
 | 2026-04-16 | 0.3     | DDL concreta incorporada ao doc (§ 9). Delegação ao @data-engineer dispensada — escopo reduzido pós-simplificação cabe no próprio documento. | Aria (Architect) |
+| 2026-05-09 | 1.0     | Promovida a Approved após aprovação da Frontend Spec v1.0. Sem mudanças materiais — frontend-spec confirmou alinhamento com decisões arquiteturais (stack, rotas `/@username`, @dnd-kit, tokens CSS variables). | Aria (Architect) |
 
 ---
 
@@ -1003,11 +1004,11 @@ Pós-simplificação (v0.2) + DDL concreta embutida (§ 9 em v0.3), não há esc
 
 **Inputs:** `docs/architecture.md` § 10.3 (estrutura de rotas) + `docs/prd.md` § 3 (UI Design Goals) + § 6 Stories.
 
-**Deliverables esperados em `docs/frontend-spec.md`:**
-- Wireframes low-fi mobile-first (360px) + desktop (1024px+) das 9 core screens.
-- Exemplos visuais dos 3 temas (`light`, `dark`, `accent`) aplicados à página pública e dashboard.
-- Estados vazio/loading/erro das telas críticas.
-- Especificação visual do drag-and-drop (hover, grabbing, drop indicator) com alternativa keyboard.
+**Deliverables entregues em `docs/frontend-spec.md` v1.0 (aprovada 2026-05-09):**
+- [x] Wireframes low-fi mobile-first (360px) + desktop (1024px+) das 9 core screens — materializados em `docs/design/prototypes/` + `docs/frontend-spec.md` § 2.
+- [x] Exemplos visuais dos 3 temas (`light`, `dark`, `accent`) aplicados à página pública e dashboard — tokens CSS variables em `docs/design/system/project/colors_and_type.css`.
+- [x] Estados vazio/loading/erro das telas críticas — cobertos no protótipo.
+- [x] Especificação visual do drag-and-drop (hover, grabbing, drop indicator) com alternativa keyboard — `docs/frontend-spec.md` § 7 (a11y completa: @dnd-kit/core + KeyboardSensor + announcements pt-BR).
 
 ---
 
