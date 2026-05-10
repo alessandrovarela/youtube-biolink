@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="pt-BR" class="theme-light">
+<head>
+<meta charset="utf-8" />
+<title>Biolink · Dashboard</title>
+<link rel="stylesheet" href="../../colors_and_type.css" />
+<style>
+  body { margin: 0; min-height: 100vh; }
+  .topbar {
+    position: sticky; top: 0; z-index: 5;
+    background: rgba(255,255,255,0.92); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--color-border);
+    height: var(--topbar-h);
+  }
+  html.theme-dark .topbar { background: rgba(11,18,32,0.92); }
+  html.theme-accent .topbar { background: rgba(250,247,242,0.92); }
+  .topbar-inner {
+    max-width: var(--max-dashboard); margin: 0 auto; padding: 0 24px;
+    height: 100%; display: flex; align-items: center; justify-content: space-between;
+  }
+  .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; letter-spacing: -0.01em; }
+  .logo-mark { width: 22px; height: 22px; border-radius: 6px; background: var(--color-accent); position: relative; }
+  .logo-mark::before, .logo-mark::after { content: ""; position: absolute; left: 5px; height: 2px; background: var(--color-accent-fg); border-radius: 1px; }
+  .logo-mark::before { top: 7px; width: 12px; box-shadow: 0 5px 0 var(--color-accent-fg); }
+  .logo-mark::after { top: 17px; width: 8px; }
+  .logo-word { font-size: 16px; }
+  .topbar-right { display: flex; align-items: center; gap: 12px; }
+  .public-link {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 13px; color: var(--color-muted-fg);
+    font-family: var(--font-mono); text-decoration: none;
+    padding: 6px 10px; border-radius: 999px; background: var(--color-muted);
+  }
+  .public-link:hover { color: var(--color-fg); }
+
+  .page { max-width: var(--max-dashboard); margin: 0 auto; padding: 32px 24px 80px; display: flex; flex-direction: column; gap: 16px; }
+
+  .tabs { display: flex; gap: 4px; padding: 4px; background: var(--color-muted); border-radius: 999px; align-self: flex-start; }
+  .tab {
+    border: 0; background: transparent; padding: 8px 16px; border-radius: 999px; font: inherit; font-size: 14px; font-weight: 500;
+    color: var(--color-muted-fg); cursor: pointer; transition: all 150ms var(--ease-out);
+  }
+  .tab.active { background: var(--color-bg); color: var(--color-fg); box-shadow: var(--shadow-sm); }
+
+  .card {
+    background: var(--color-bg); border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg); padding: 24px;
+    box-shadow: var(--shadow-sm);
+    display: flex; flex-direction: column; gap: 16px;
+  }
+  html.theme-dark .card { box-shadow: none; }
+  .card-title { font-size: 18px; font-weight: 600; margin: 0; }
+  .divider { height: 1px; background: var(--color-border); margin: 4px 0; }
+
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  label { font-size: 14px; font-weight: 500; }
+  input, textarea {
+    font-family: inherit; font-size: 14px;
+    padding: 10px 12px; border: 1px solid var(--color-border); border-radius: 8px;
+    background: var(--color-bg); color: var(--color-fg);
+    transition: border-color 150ms;
+  }
+  input:focus, textarea:focus { outline: 2px solid var(--color-accent); outline-offset: 2px; border-color: var(--color-accent); }
+  .hint { font-size: 12px; color: var(--color-muted-fg); align-self: flex-end; }
+
+  .btn { font-family: inherit; font-size: 14px; font-weight: 500; border: 0; border-radius: 8px; padding: 10px 16px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; transition: all 150ms var(--ease-out); }
+  .btn.primary { background: var(--color-accent); color: var(--color-accent-fg); }
+  .btn.primary:hover { background: color-mix(in oklab, var(--color-accent), black 6%); }
+  .btn.ghost { background: transparent; color: var(--color-fg); }
+  .btn.ghost:hover { background: var(--color-muted); }
+  .btn.sm { font-size: 13px; padding: 6px 10px; border-radius: 6px; }
+  .actions-row { display: flex; justify-content: flex-end; }
+
+  .theme-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .theme-opt {
+    border-radius: 14px; padding: 14px; border: 2px solid transparent;
+    cursor: pointer; display: flex; flex-direction: column; gap: 10px;
+    transition: transform 120ms;
+    text-align: left; font: inherit;
+  }
+  .theme-opt:hover { transform: translateY(-2px); }
+  .theme-opt.theme-light  { background: #FFFFFF; color: #0F172A; box-shadow: 0 1px 2px rgba(15,23,42,.06); border-color: #E2E8F0; }
+  .theme-opt.theme-dark   { background: #0B1220; color: #E5E7EB; border-color: #243046; }
+  .theme-opt.theme-accent { background: #FAF7F2; color: #1A1410; border-color: #E5DBC8; }
+  .theme-opt.selected { border-color: var(--color-accent) !important; }
+  .theme-name { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .theme-check { width: 14px; height: 14px; border-radius: 50%; background: var(--color-accent); color: var(--color-accent-fg); display: inline-flex; align-items: center; justify-content: center; }
+  .theme-strip { display: flex; gap: 5px; }
+  .theme-strip span { flex: 1; height: 24px; border-radius: 6px; }
+  .theme-light  .ts1 { background: #FFFFFF; border: 1px solid #E2E8F0; } .theme-light  .ts2 { background: #F1F5F9; } .theme-light  .ts3 { background: #2563EB; }
+  .theme-dark   .ts1 { background: #0B1220; border: 1px solid #243046; } .theme-dark   .ts2 { background: #1A2233; } .theme-dark   .ts3 { background: #60A5FA; }
+  .theme-accent .ts1 { background: #FAF7F2; border: 1px solid #E5DBC8; } .theme-accent .ts2 { background: #F0E9DD; } .theme-accent .ts3 { background: #D97757; }
+
+  .add-form { display: grid; grid-template-columns: 1fr 1.5fr auto; gap: 8px; }
+  .link-list { display: flex; flex-direction: column; gap: 8px; }
+  .link-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 12px; background: var(--color-bg);
+    border: 1px solid var(--color-border); border-radius: 10px;
+  }
+  .link-row.inactive { opacity: 0.55; }
+  .grip { color: var(--color-muted-fg); cursor: grab; flex-shrink: 0; }
+  .link-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .link-title { font-size: 14px; font-weight: 600; }
+  .link-url { font-size: 12px; color: var(--color-muted-fg); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .icon-btn { width: 30px; height: 30px; border: 0; border-radius: 6px; background: transparent; color: var(--color-muted-fg); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+  .icon-btn:hover { background: var(--color-muted); color: var(--color-fg); }
+  .empty { padding: 20px; text-align: center; color: var(--color-muted-fg); font-size: 14px; border: 1px dashed var(--color-border); border-radius: 10px; }
+
+  .switch { position: relative; width: 36px; height: 20px; background: var(--color-muted); border: 0; border-radius: 999px; cursor: pointer; transition: background 150ms; padding: 0; }
+  .switch.on { background: var(--color-accent); }
+  .switch .knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; background: #fff; border-radius: 50%; transition: left 150ms; box-shadow: 0 1px 2px rgba(0,0,0,.15); }
+  .switch.on .knob { left: 18px; }
+
+  .stats-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .stat { display: flex; flex-direction: column; gap: 4px; padding: 14px; border: 1px solid var(--color-border); border-radius: 10px; }
+  .stat-label { font-size: 12px; color: var(--color-muted-fg); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+  .stat-value { font-size: 28px; font-weight: 700; letter-spacing: -0.01em; }
+  .stat-delta { font-size: 12px; color: var(--color-success); font-weight: 500; }
+  .stat-delta.muted { color: var(--color-muted-fg); }
+
+  .chart-wrap { padding: 8px 0 0; }
+
+  .top-links { display: flex; flex-direction: column; gap: 0; border-top: 1px solid var(--color-border); }
+  .top-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--color-border); font-size: 14px; }
+  .top-row:last-child { border-bottom: 0; }
+  .top-head { color: var(--color-muted-fg); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+
+  .toast-mount { position: fixed; bottom: 24px; right: 24px; z-index: 30; }
+  .toast {
+    background: rgba(255,255,255,0.92); backdrop-filter: blur(8px);
+    border: 1px solid var(--color-border); border-radius: 10px;
+    padding: 10px 14px; font-size: 14px;
+    box-shadow: var(--shadow-md);
+    display: flex; align-items: center; gap: 8px;
+    animation: pop 200ms var(--ease-out);
+  }
+  html.theme-dark .toast { background: rgba(11,18,32,0.92); }
+  @keyframes pop { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+</style>
+</head>
+<body>
+  <div id="root"></div>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+  <script type="text/babel" src="Dashboard.jsx"></script>
+  <script type="text/babel">
+    function App() {
+      const [tab, setTab] = React.useState("links");
+      const [profile, setProfile] = React.useState({
+        username: "alessandro",
+        display_name: "Alessandro Varela",
+        bio: "Engenheiro fullstack ensinando Next.js + Supabase em público.",
+        avatar_url: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=256",
+        theme: "light"
+      });
+      const [links, setLinks] = React.useState([
+        { id: "1", title: "Curso de Next.js + Supabase", url: "https://example.com/curso", is_active: true },
+        { id: "2", title: "Repositório no GitHub", url: "https://github.com/alessandro/youtube-biolink", is_active: true },
+        { id: "3", title: "Newsletter semanal", url: "https://example.com/newsletter", is_active: true },
+        { id: "4", title: "Canal no YouTube", url: "https://youtube.com/@alessandro", is_active: true },
+        { id: "5", title: "Discord da comunidade", url: "https://discord.gg/example", is_active: false },
+      ]);
+      const [toast, setToast] = React.useState(null);
+      const flash = (m) => { setToast(m); setTimeout(() => setToast(null), 2000); };
+
+      const onProfileChange = (patch) => setProfile(p => ({ ...p, ...patch }));
+      const onSave = () => flash("Perfil atualizado.");
+      const onTheme = (t) => { setProfile(p => ({ ...p, theme: t })); document.documentElement.className = "theme-" + t; flash("Tema aplicado."); };
+
+      const onAdd = (data) => { setLinks(ls => [...ls, { id: String(Date.now()), ...data, is_active: true }]); flash("Link criado."); };
+      const onToggle = (id) => setLinks(ls => ls.map(l => l.id === id ? { ...l, is_active: !l.is_active } : l));
+      const onDelete = (id) => { setLinks(ls => ls.filter(l => l.id !== id)); flash("Link removido."); };
+      const onEdit = () => flash("Edição inline em breve.");
+
+      // sample chart data: 30 days
+      const chartData = React.useMemo(() => {
+        const out = [];
+        for (let i = 0; i < 30; i++) {
+          out.push({ day: i, clicks: Math.round(20 + 30*Math.sin(i/4) + Math.random()*15 + i*1.4) });
+        }
+        return out;
+      }, []);
+
+      return (
+        <>
+          <TopBar username={profile.username} onSignOut={() => flash("Sessão encerrada.")}/>
+          <main className="page">
+            <Tabs value={tab} onChange={setTab}/>
+            {tab === "profile" && <ProfileForm profile={profile} onChange={onProfileChange} onSave={onSave} onTheme={onTheme}/>}
+            {tab === "links" && <LinkList links={links} onAdd={onAdd} onToggle={onToggle} onDelete={onDelete} onEdit={onEdit}/>}
+            {tab === "analytics" && <AnalyticsPanel data={chartData}/>}
+          </main>
+          {toast && (
+            <div className="toast-mount">
+              <div className="toast">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--color-success)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                {toast}
+              </div>
+            </div>
+          )}
+        </>
+      );
+    }
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

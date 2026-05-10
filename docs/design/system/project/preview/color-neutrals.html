@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<title>Color — Neutrals</title>
+<link rel="stylesheet" href="../colors_and_type.css" />
+<style>
+  body { margin: 0; padding: 24px; }
+  .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+  .cell { display: flex; flex-direction: column; gap: 4px; }
+  .sw { height: 56px; border-radius: var(--radius-md); border: 1px solid var(--color-border); }
+  .name { font-size: 11px; font-weight: 500; }
+  .hex { font-family: var(--font-mono); font-size: 10px; color: var(--color-muted-fg); }
+  h3 { margin: 0 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--color-muted-fg); font-weight: 600; }
+  section + section { margin-top: 18px; }
+</style>
+</head>
+<body>
+  <section>
+    <h3>Neutrals (light)</h3>
+    <div class="grid">
+      <div class="cell"><div class="sw" style="background:#FFFFFF"></div><span class="name">bg</span><span class="hex">#FFFFFF</span></div>
+      <div class="cell"><div class="sw" style="background:#F1F5F9"></div><span class="name">muted</span><span class="hex">#F1F5F9</span></div>
+      <div class="cell"><div class="sw" style="background:#E2E8F0"></div><span class="name">border</span><span class="hex">#E2E8F0</span></div>
+      <div class="cell"><div class="sw" style="background:#475569"></div><span class="name">muted-fg</span><span class="hex">#475569</span></div>
+      <div class="cell"><div class="sw" style="background:#0F172A"></div><span class="name">fg</span><span class="hex">#0F172A</span></div>
+    </div>
+  </section>
+  <section>
+    <h3>Status</h3>
+    <div class="grid">
+      <div class="cell"><div class="sw" style="background:#16A34A"></div><span class="name">success</span><span class="hex">#16A34A</span></div>
+      <div class="cell"><div class="sw" style="background:#D97706"></div><span class="name">warning</span><span class="hex">#D97706</span></div>
+      <div class="cell"><div class="sw" style="background:#DC2626"></div><span class="name">danger</span><span class="hex">#DC2626</span></div>
+      <div class="cell"><div class="sw" style="background:#0284C7"></div><span class="name">info</span><span class="hex">#0284C7</span></div>
+      <div class="cell"></div>
+    </div>
+  </section>
+</body>
+</html>

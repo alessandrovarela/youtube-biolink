@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<title>Theme Selector</title>
+<link rel="stylesheet" href="../colors_and_type.css" />
+<style>
+  body { margin: 0; padding: 24px; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .opt { border-radius: 14px; padding: 16px; cursor: pointer; display: flex; flex-direction: column; gap: 10px; transition: transform 120ms; }
+  .opt:hover { transform: translateY(-2px); }
+  .opt.light  { background: #FFFFFF; color: #0F172A; border: 2px solid var(--color-accent); box-shadow: var(--shadow-sm); }
+  .opt.dark   { background: #0B1220; color: #E5E7EB; border: 2px solid #243046; }
+  .opt.accent { background: #FAF7F2; color: #1A1410; border: 2px solid #E5DBC8; }
+  .name { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .check { width: 16px; height: 16px; border-radius: 50%; background: var(--color-accent); color: #fff; display: inline-flex; align-items: center; justify-content: center; }
+  .strip { display: flex; gap: 6px; }
+  .strip span { flex: 1; height: 28px; border-radius: 6px; }
+  .preview { font-size: 11px; opacity: 0.7; }
+</style>
+</head>
+<body>
+  <div class="grid">
+    <div class="opt light">
+      <div class="name">light <span class="check"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span></div>
+      <div class="strip"><span style="background:#FFFFFF;border:1px solid #E2E8F0"></span><span style="background:#F1F5F9"></span><span style="background:#2563EB"></span></div>
+      <span class="preview">Selecionado</span>
+    </div>
+    <div class="opt dark">
+      <div class="name">dark</div>
+      <div class="strip"><span style="background:#0B1220;border:1px solid #243046"></span><span style="background:#1A2233"></span><span style="background:#60A5FA"></span></div>
+      <span class="preview">Tema escuro</span>
+    </div>
+    <div class="opt accent">
+      <div class="name">accent</div>
+      <div class="strip"><span style="background:#FAF7F2;border:1px solid #E5DBC8"></span><span style="background:#F0E9DD"></span><span style="background:#D97757"></span></div>
+      <span class="preview">Marca quente</span>
+    </div>
+  </div>
+</body>
+</html>

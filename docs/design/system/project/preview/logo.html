@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<title>Logo</title>
+<link rel="stylesheet" href="../colors_and_type.css" />
+<style>
+  body { margin: 0; padding: 24px; display: flex; flex-direction: column; gap: 16px; align-items: stretch; }
+  .row { display: flex; align-items: center; gap: 24px; padding: 16px; border-radius: var(--radius-md); border: 1px solid var(--color-border); }
+  .row.light  { background: #FFFFFF; color: #0F172A; }
+  .row.dark   { background: #0B1220; color: #E5E7EB; border-color: #243046; }
+  .row.accent { background: #FAF7F2; color: #1A1410; border-color: #E5DBC8; }
+  .label { font-size: var(--text-xs); color: var(--color-muted-fg); margin-left: auto; text-transform: uppercase; letter-spacing: 0.06em; }
+  .row.light .label  { color: #64748B; }
+  .row.dark .label   { color: #94A3B8; }
+  .row.accent .label { color: #5C4F42; }
+  svg { display: block; }
+</style>
+</head>
+<body>
+  <div class="row light">
+    <svg xmlns="http://www.w3.org/2000/svg" width="220" height="40" viewBox="0 0 220 40" fill="none">
+      <rect x="2" y="8" width="24" height="24" rx="6" fill="currentColor"/>
+      <rect x="8" y="14" width="12" height="2.5" rx="1.25" fill="#FFFFFF"/>
+      <rect x="8" y="19" width="12" height="2.5" rx="1.25" fill="#FFFFFF"/>
+      <rect x="8" y="24" width="8" height="2.5" rx="1.25" fill="#FFFFFF"/>
+      <text x="34" y="27" font-family="Inter, sans-serif" font-size="18" font-weight="700" letter-spacing="-0.02em" fill="currentColor">biolink</text>
+      <text x="125" y="27" font-family="Inter, sans-serif" font-size="18" font-weight="400" letter-spacing="-0.02em" fill="currentColor" opacity="0.55">/youtube</text>
+    </svg>
+    <span class="label">light</span>
+  </div>
+  <div class="row dark">
+    <svg xmlns="http://www.w3.org/2000/svg" width="220" height="40" viewBox="0 0 220 40" fill="none">
+      <rect x="2" y="8" width="24" height="24" rx="6" fill="currentColor"/>
+      <rect x="8" y="14" width="12" height="2.5" rx="1.25" fill="#0B1220"/>
+      <rect x="8" y="19" width="12" height="2.5" rx="1.25" fill="#0B1220"/>
+      <rect x="8" y="24" width="8" height="2.5" rx="1.25" fill="#0B1220"/>
+      <text x="34" y="27" font-family="Inter, sans-serif" font-size="18" font-weight="700" letter-spacing="-0.02em" fill="currentColor">biolink</text>
+      <text x="125" y="27" font-family="Inter, sans-serif" font-size="18" font-weight="400" letter-spacing="-0.02em" fill="currentColor" opacity="0.6">/youtube</text>
+    </svg>
+    <span class="label">dark</span>
+  </div>
+  <div class="row accent">
+    <svg xmlns="http://www.w3.org/2000/svg" width="220" height="40" viewBox="0 0 220 40" fill="none">
+      <rect x="2" y="8" width="24" height="24" rx="6" fill="#D97757"/>
+      <rect x="8" y="14" width="12" height="2.5" rx="1.25" fill="#FFFFFF"/>
+      <rect x="8" y="19" width="12" height="2.5" rx="1.25" fill="#FFFFFF"/>
+      <rect x="8" y="24" width="8" height="2.5" rx="1.25" fill="#FFFFFF"/>
+      <text x="34" y="27" font-family="Inter, sans-serif" font-size="18" font-weight="700" letter-spacing="-0.02em" fill="currentColor">biolink</text>
+      <text x="125" y="27" font-family="Inter, sans-serif" font-size="18" font-weight="400" letter-spacing="-0.02em" fill="currentColor" opacity="0.55">/youtube</text>
+    </svg>
+    <span class="label">accent</span>
+  </div>
+</body>
+</html>

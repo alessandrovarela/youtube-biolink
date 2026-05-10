@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<title>Buttons</title>
+<link rel="stylesheet" href="../colors_and_type.css" />
+<style>
+  body { margin: 0; padding: 24px; }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px 16px; align-items: center; }
+  .head { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--color-muted-fg); font-weight: 600; }
+  button { font-family: inherit; font-size: 14px; font-weight: 500; border: 0; cursor: pointer; border-radius: 10px; padding: 10px 16px; display: inline-flex; align-items: center; gap: 8px; transition: all 150ms var(--ease-out); }
+  .primary    { background: var(--color-accent); color: var(--color-accent-fg); }
+  .primary:hover { background: color-mix(in oklab, var(--color-accent), black 6%); }
+  .primary.active { background: color-mix(in oklab, var(--color-accent), black 12%); transform: scale(0.98); }
+  .secondary { background: var(--color-muted); color: var(--color-fg); }
+  .secondary:hover { background: color-mix(in oklab, var(--color-muted), black 4%); }
+  .ghost { background: transparent; color: var(--color-fg); }
+  .ghost:hover { background: var(--color-muted); }
+  .destructive { background: var(--color-danger); color: #fff; }
+  .destructive:hover { background: color-mix(in oklab, var(--color-danger), black 6%); }
+  .disabled { opacity: 0.5; cursor: not-allowed; }
+  .sm { font-size: 13px; padding: 6px 12px; border-radius: 8px; }
+  .lg { font-size: 15px; padding: 12px 20px; }
+</style>
+</head>
+<body>
+  <div class="grid">
+    <span class="head">primary</span>
+    <span class="head">secondary</span>
+    <span class="head">ghost</span>
+    <span class="head">destructive</span>
+
+    <button class="primary">Salvar</button>
+    <button class="secondary">Cancelar</button>
+    <button class="ghost">Editar</button>
+    <button class="destructive">Excluir</button>
+
+    <button class="primary active">Salvar</button>
+    <button class="secondary">+ Adicionar link</button>
+    <button class="ghost">Sair</button>
+    <button class="destructive disabled">Excluir</button>
+
+    <button class="primary sm">sm</button>
+    <button class="primary">md</button>
+    <button class="primary lg">lg</button>
+    <button class="primary disabled">Disabled</button>
+  </div>
+</body>
+</html>

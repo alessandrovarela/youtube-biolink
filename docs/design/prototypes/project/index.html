@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Biolink — Telas prototipadas</title>
+<link rel="stylesheet" href="assets/colors_and_type.css"/>
+<link rel="stylesheet" href="styles.css"/>
+<style>
+  body { margin: 0; font-family: var(--font-sans); }
+  /* Each artboard gets its own theme isolated via class so all 3 themes coexist on the canvas. */
+  .ab-frame { width: 100%; height: 100%; overflow: hidden; position: relative; }
+  .ab-frame.theme-light { --color-bg:#FFFFFF; --color-fg:#0F172A; --color-muted:#F1F5F9; --color-muted-fg:#475569; --color-border:#E2E8F0; --color-accent:#2563EB; --color-accent-fg:#FFFFFF; --color-accent-soft:#DBEAFE; }
+  .ab-frame.theme-dark  { --color-bg:#0B1220; --color-fg:#E5E7EB; --color-muted:#1A2233; --color-muted-fg:#94A3B8; --color-border:#243046; --color-accent:#60A5FA; --color-accent-fg:#0B1220; --color-accent-soft:#1E3A5F; --shadow-sm:0 0 0 1px var(--color-border); --shadow-md:0 0 0 1px var(--color-border); }
+  .ab-frame.theme-accent{ --color-bg:#FAF7F2; --color-fg:#1A1410; --color-muted:#F0E9DD; --color-muted-fg:#5C4F42; --color-border:#E5DBC8; --color-accent:#D97757; --color-accent-fg:#FFFFFF; --color-accent-soft:#F4DDD0; }
+  .ab-frame { background: var(--color-bg); color: var(--color-fg); }
+  /* Public profile artboards are mobile-shaped (no chrome). Dashboard/auth are desktop-shaped. */
+  .ab-frame.scroll { overflow-y: auto; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="screens/shared.jsx"></script>
+<script type="text/babel" src="screens/auth.jsx"></script>
+<script type="text/babel" src="screens/dashboard.jsx"></script>
+<script type="text/babel" src="screens/public.jsx"></script>
+
+<script type="text/babel" data-presets="env,react">
+const { DesignCanvas, DCSection, DCArtboard, DCPostIt } = window;
+
+function Frame({ theme = "light", scroll, children }) {
+  return <div className={"ab-frame theme-" + theme + (scroll ? " scroll" : "")}>{children}</div>;
+}
+
+const MOBILE = { width: 390, height: 760 };
+const DESKTOP = { width: 1180, height: 760 };
+const AUTH = { width: 520, height: 720 };
+
+function App() {
+  return (
+    <DesignCanvas>
+      <DCSection id="public" title="Página pública /@username" subtitle="Mobile-first · 480px coluna · 3 temas">
+        <DCArtboard id="pub-light" label="Light" {...MOBILE}>
+          <Frame theme="light" scroll><PublicProfileScreen/></Frame>
+        </DCArtboard>
+        <DCArtboard id="pub-dark" label="Dark" {...MOBILE}>
+          <Frame theme="dark" scroll><PublicProfileScreen/></Frame>
+        </DCArtboard>
+        <DCArtboard id="pub-accent" label="Accent" {...MOBILE}>
+          <Frame theme="accent" scroll><PublicProfileScreen/></Frame>
+        </DCArtboard>
+        <DCArtboard id="pub-404" label="404 · username livre" {...MOBILE}>
+          <Frame theme="light" scroll><NotFoundScreen/></Frame>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="auth" title="Auth" subtitle="Signup · Verificação · Login · Reset">
+        <DCArtboard id="signup" label="Signup" {...AUTH}>
+          <Frame theme="light" scroll><SignupScreen/></Frame>
+        </DCArtboard>
+        <DCArtboard id="check-email" label="Confirme seu e-mail" {...AUTH}>
+          <Frame theme="light" scroll><CheckEmailScreen/></Frame>
+        </DCArtboard>
+        <DCArtboard id="login" label="Login" {...AUTH}>
+          <Frame theme="light" scroll><LoginScreen banner="Conta confirmada — entre para continuar."/></Frame>
+        </DCArtboard>
+        <DCArtboard id="login-error" label="Login · erro" {...AUTH}>
+          <Frame theme="light" scroll><LoginErrorScreen/></Frame>
+        </DCArtboard>
+        <DCArtboard id="reset-req" label="Recuperar senha" {...AUTH}>
+          <Frame theme="light" scroll><ResetRequestScreen/></Frame>
+        </DCArtboard>
+        <DCArtboard id="reset-confirm" label="Nova senha" {...AUTH}>
+          <Frame theme="light" scroll><ResetConfirmScreen/></Frame>
+        </DCArtboard>
+        <DCArtboard id="confirm-failed" label="Link expirado" {...AUTH}>
+          <Frame theme="light" scroll><ConfirmFailedScreen/></Frame>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="dashboard-profile" title="Dashboard · Perfil" subtitle="Edição de display name, bio, avatar, tema">
+        <DCArtboard id="dash-profile-light" label="Light" {...DESKTOP}>
+          <Frame theme="light" scroll><DashProfileScreen/></Frame>
+        </DCArtboard>
+        <DCArtboard id="dash-profile-dark" label="Dark" {...DESKTOP}>
+          <Frame theme="dark" scroll><DashProfileScreen/></Frame>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="dashboard-links" title="Dashboard · Meus links" subtitle="CRUD · drag/drop · toggle ativo · 30 max">
+        <DCArtboard id="dash-links" label="Lista de links" {...DESKTOP}>
+          <Frame theme="light" scroll><DashLinksScreen/></Frame>
+        </DCArtboard>
+        <DCArtboard id="dash-links-drag" label="Reordenando" {...DESKTOP}>
+          <Frame theme="light" scroll><DashLinksScreen variant="drag"/></Frame>
+        </DCArtboard>
+        <DCArtboard id="dash-links-empty" label="Vazio · primeiro acesso" {...DESKTOP}>
+          <Frame theme="light" scroll><DashLinksEmptyScreen/></Frame>
+        </DCArtboard>
+        <DCArtboard id="dash-links-accent" label="Tema Accent" {...DESKTOP}>
+          <Frame theme="accent" scroll><DashLinksScreen/></Frame>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="dashboard-analytics" title="Dashboard · Analytics" subtitle="Cliques agregados · top links · 7d/30d/tudo">
+        <DCArtboard id="dash-analytics-light" label="Light" {...DESKTOP}>
+          <Frame theme="light" scroll><DashAnalyticsScreen/></Frame>
+        </DCArtboard>
+        <DCArtboard id="dash-analytics-dark" label="Dark" {...DESKTOP}>
+          <Frame theme="dark" scroll><DashAnalyticsScreen/></Frame>
+        </DCArtboard>
+      </DCSection>
+    </DesignCanvas>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>

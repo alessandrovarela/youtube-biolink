@@ -1,0 +1,164 @@
+/* =========================================================================
+   Biolink Design System — Tokens
+   Drop into any HTML page:
+     <link rel="stylesheet" href="colors_and_type.css">
+   Tokens cascade from :root (light by default) and override under
+   .theme-dark / .theme-accent. To switch: <html class="theme-dark">.
+   ========================================================================= */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+  /* ----- Color: light theme (default) ----- */
+  --color-bg: #FFFFFF;
+  --color-fg: #0F172A;
+  --color-muted: #F1F5F9;
+  --color-muted-fg: #475569;
+  --color-border: #E2E8F0;
+  --color-accent: #2563EB;
+  --color-accent-fg: #FFFFFF;
+  --color-accent-soft: #DBEAFE;
+
+  /* Status (constant across themes) */
+  --color-success: #16A34A;
+  --color-warning: #D97706;
+  --color-danger:  #DC2626;
+  --color-info:    #0284C7;
+
+  /* ----- Typography ----- */
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --text-xs:   12px;  --leading-xs:   16px;
+  --text-sm:   14px;  --leading-sm:   20px;
+  --text-base: 16px;  --leading-base: 24px;
+  --text-lg:   18px;  --leading-lg:   28px;
+  --text-xl:   20px;  --leading-xl:   28px;
+  --text-2xl:  24px;  --leading-2xl:  32px;
+  --text-3xl:  30px;  --leading-3xl:  36px;
+  --text-4xl:  36px;  --leading-4xl:  40px;
+
+  --weight-regular: 400;
+  --weight-medium:  500;
+  --weight-semibold: 600;
+  --weight-bold:    700;
+
+  /* ----- Spacing (4px grid) ----- */
+  --space-1: 4px;  --space-2: 8px;  --space-3: 12px; --space-4: 16px;
+  --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-10: 40px;
+  --space-12: 64px;
+
+  /* ----- Radii ----- */
+  --radius-sm:   6px;
+  --radius-md:  10px;
+  --radius-lg:  16px;
+  --radius-pill: 999px;
+
+  /* ----- Shadows ----- */
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, .06);
+  --shadow-md: 0 6px 16px rgba(15, 23, 42, .08), 0 2px 4px rgba(15, 23, 42, .06);
+
+  /* ----- Motion ----- */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast: 120ms;
+  --duration-base: 150ms;
+  --duration-slow: 220ms;
+
+  /* ----- Layout ----- */
+  --max-public:    480px;
+  --max-dashboard: 720px;
+  --topbar-h:      64px;
+}
+
+html.theme-dark {
+  --color-bg: #0B1220;
+  --color-fg: #E5E7EB;
+  --color-muted: #1A2233;
+  --color-muted-fg: #94A3B8;
+  --color-border: #243046;
+  --color-accent: #60A5FA;
+  --color-accent-fg: #0B1220;
+  --color-accent-soft: #1E3A5F;
+
+  /* Dark theme: no shadows — borders carry elevation */
+  --shadow-sm: 0 0 0 1px var(--color-border);
+  --shadow-md: 0 0 0 1px var(--color-border);
+}
+
+html.theme-accent {
+  --color-bg: #FAF7F2;
+  --color-fg: #1A1410;
+  --color-muted: #F0E9DD;
+  --color-muted-fg: #5C4F42;
+  --color-border: #E5DBC8;
+  --color-accent: #D97757;
+  --color-accent-fg: #FFFFFF;
+  --color-accent-soft: #F4DDD0;
+}
+
+/* ----- Semantic element styles ----- */
+html, body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--leading-base);
+  font-feature-settings: "ss01";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, .h1 {
+  font-size: var(--text-4xl);
+  line-height: var(--leading-4xl);
+  font-weight: var(--weight-bold);
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+h2, .h2 {
+  font-size: var(--text-2xl);
+  line-height: var(--leading-2xl);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+h3, .h3 {
+  font-size: var(--text-lg);
+  line-height: var(--leading-lg);
+  font-weight: var(--weight-semibold);
+  margin: 0;
+}
+p, .body {
+  font-size: var(--text-base);
+  line-height: var(--leading-base);
+  margin: 0;
+}
+.small, small {
+  font-size: var(--text-sm);
+  line-height: var(--leading-sm);
+  color: var(--color-muted-fg);
+}
+.label {
+  font-size: var(--text-sm);
+  line-height: var(--leading-sm);
+  font-weight: var(--weight-medium);
+}
+.mono, code {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}
+.tabular { font-variant-numeric: tabular-nums; }
+
+/* ----- Focus ring (universal) ----- */
+*:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0ms !important;
+    animation-duration: 0ms !important;
+  }
+}

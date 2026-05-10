@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="220" height="40" viewBox="0 0 220 40" fill="none">
+  <rect x="2" y="8" width="24" height="24" rx="6" fill="currentColor"></rect>
+  <rect x="8" y="14" width="12" height="2.5" rx="1.25" fill="white"></rect>
+  <rect x="8" y="19" width="12" height="2.5" rx="1.25" fill="white"></rect>
+  <rect x="8" y="24" width="8" height="2.5" rx="1.25" fill="white"></rect>
+  <text x="34" y="27" font-family="Inter, sans-serif" font-size="18" font-weight="700" letter-spacing="-0.02em" fill="currentColor">biolink</text>
+  <text x="125" y="27" font-family="Inter, sans-serif" font-size="18" font-weight="400" letter-spacing="-0.02em" fill="currentColor" opacity="0.55">/youtube</text>
+</svg>

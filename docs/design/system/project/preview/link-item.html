@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<title>Link Item · States</title>
+<link rel="stylesheet" href="../colors_and_type.css" />
+<style>
+  body { margin: 0; padding: 24px; display: flex; flex-direction: column; gap: 12px; background: var(--color-muted); }
+  .link { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: #FFF; border: 1px solid var(--color-border); border-radius: 12px; box-shadow: var(--shadow-sm); }
+  .grip { width: 18px; height: 18px; opacity: 0.4; cursor: grab; }
+  .body { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .title { font-size: 14px; font-weight: 600; }
+  .url { font-size: 12px; color: var(--color-muted-fg); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .actions { display: flex; gap: 6px; }
+  .icon-btn { width: 32px; height: 32px; border-radius: 8px; border: 0; background: transparent; cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--color-muted-fg); }
+  .icon-btn:hover { background: var(--color-muted); color: var(--color-fg); }
+  .badge { font-size: 11px; font-weight: 500; padding: 2px 8px; border-radius: 999px; background: var(--color-muted); color: var(--color-muted-fg); }
+  .badge.on { background: #DCFCE7; color: #15803D; }
+  .link.dragging { box-shadow: var(--shadow-md); transform: rotate(-1deg); border-color: var(--color-accent); }
+  .link.inactive { opacity: 0.55; }
+</style>
+</head>
+<body>
+  <div class="link">
+    <svg class="grip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="9" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="18" r="1"/></svg>
+    <div class="body">
+      <span class="title">Curso de Next.js + Supabase</span>
+      <span class="url">https://youtube.com/@alessandro/playlist</span>
+    </div>
+    <span class="badge on">Ativo</span>
+    <div class="actions">
+      <button class="icon-btn" aria-label="Editar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>
+      <button class="icon-btn" aria-label="Excluir"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>
+    </div>
+  </div>
+  <div class="link dragging">
+    <svg class="grip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="9" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="18" r="1"/></svg>
+    <div class="body">
+      <span class="title">Repositório no GitHub</span>
+      <span class="url">https://github.com/alessandro/youtube-biolink</span>
+    </div>
+    <span class="badge on">Ativo</span>
+  </div>
+  <div class="link inactive">
+    <svg class="grip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="9" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="18" r="1"/></svg>
+    <div class="body">
+      <span class="title">Newsletter</span>
+      <span class="url">https://newsletter.alessandro.dev</span>
+    </div>
+    <span class="badge">Oculto</span>
+  </div>
+</body>
+</html>

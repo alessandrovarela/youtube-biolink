@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<title>Type — Body & UI</title>
+<link rel="stylesheet" href="../colors_and_type.css" />
+<style>
+  body { margin: 0; padding: 24px; display: flex; flex-direction: column; gap: 8px; }
+  .row { display: flex; align-items: baseline; gap: 16px; padding: 8px 0; border-bottom: 1px dashed var(--color-border); }
+  .row:last-child { border-bottom: 0; }
+  .meta { width: 110px; flex-shrink: 0; font-size: var(--text-xs); color: var(--color-muted-fg); font-family: var(--font-mono); }
+  .muted { color: var(--color-muted-fg); }
+</style>
+</head>
+<body>
+  <div class="row">
+    <div class="meta">16 / 24 / 400</div>
+    <div style="font-size:16px;line-height:24px">Crie sua página de links em poucos minutos.</div>
+  </div>
+  <div class="row">
+    <div class="meta">14 / 20 / 500</div>
+    <div style="font-size:14px;line-height:20px;font-weight:500">Nome de exibição</div>
+  </div>
+  <div class="row">
+    <div class="meta">14 / 20 / 400</div>
+    <div style="font-size:14px;line-height:20px" class="muted">Apenas letras minúsculas, números e _.</div>
+  </div>
+  <div class="row">
+    <div class="meta">12 / 16 / 400</div>
+    <div style="font-size:12px;line-height:16px" class="muted">0/160</div>
+  </div>
+  <div class="row">
+    <div class="meta">14 / mono</div>
+    <code style="font-size:14px">/@alessandro</code>
+  </div>
+  <div class="row">
+    <div class="meta">tabular</div>
+    <div style="font-size:24px;font-weight:600;font-variant-numeric:tabular-nums">1.247 cliques</div>
+  </div>
+</body>
+</html>
