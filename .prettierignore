@@ -3,6 +3,7 @@ node_modules/
 pnpm-lock.yaml
 public/
 # AIOX framework files — not project app code
+.aiox/
 .aiox-core/
 .claude/
 .antigravity/
