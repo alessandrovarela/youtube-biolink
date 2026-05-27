@@ -1,6 +1,7 @@
 # youtube-biolink
 
-> Criado com Synkra AIOX
+> Next.js 16 + TypeScript strict + Tailwind 4 — inicializado via Story 1.1 (`create-next-app@latest`).
+> Orquestrado com Synkra AIOX.
 
 ## Visão Geral
 
