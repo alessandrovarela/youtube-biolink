@@ -1,0 +1,15 @@
+.next/
+node_modules/
+pnpm-lock.yaml
+public/
+# AIOX framework files — not project app code
+.aiox-core/
+.claude/
+.antigravity/
+.codex/
+.cursor/
+.gemini/
+.github/
+docs/
+AGENTS.md
+README.md
