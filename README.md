@@ -1,13 +1,59 @@
 # youtube-biolink
 
-> Next.js 16 + TypeScript strict + Tailwind 4 — inicializado via Story 1.1 (`create-next-app@latest`).
-> Orquestrado com Synkra AIOX.
+![CI](https://github.com/alessandrovarela/youtube-biolink/actions/workflows/ci.yml/badge.svg)
+
+> Projeto didático fullstack: Next.js 16 + Supabase + Vercel.
+> Aprenda autenticação, banco de dados, SSR, CI/CD, analytics e design system
+> construindo um clone simplificado do Linktree do zero.
 
 **Produção:** [https://youtube-biolink.vercel.app](https://youtube-biolink.vercel.app)
 
-## Visão Geral
+## Stack
 
-Biolink didático para criadores de YouTube — página de links centralizada (Linktree-like) construída com Next.js 15 App Router, Supabase (auth + DB), Tailwind CSS e deploy automático na Vercel.
+Next.js 16 · TypeScript strict · Tailwind 4 · Supabase Cloud · Vercel · pnpm 9
+
+## Pré-requisitos
+
+- Node.js 20+
+- pnpm 9 (`npm install -g pnpm`)
+- Conta gratuita no [Supabase](https://supabase.com) (ou solicitar credenciais do projeto `development` ao owner)
+
+> **Nota:** o projeto não requer Supabase local. Use o projeto `development` na nuvem.
+
+## Setup local
+
+```bash
+# 1. Clone o repositório
+git clone https://github.com/alessandrovarela/youtube-biolink.git
+cd youtube-biolink
+
+# 2. Copie o arquivo de variáveis de ambiente
+cp .env.example .env.local
+
+# 3. Preencha as credenciais do projeto Supabase development em .env.local
+#    Obtenha em: supabase.com → youtube-biolink-dev → Settings → API
+
+# 4. Instale as dependências
+pnpm install
+
+# 5. Inicie o servidor de desenvolvimento
+pnpm dev
+
+# 6. Acesse http://localhost:3000
+```
+
+## Comandos principais
+
+| Comando | Descrição |
+|---------|-----------|
+| `pnpm dev` | Servidor de desenvolvimento |
+| `pnpm build` | Build de produção |
+| `pnpm lint` | Verificar código |
+| `pnpm format` | Formatar código |
+| `pnpm typecheck` | Verificar tipos TypeScript |
+| `pnpm test` | Executar todos os testes |
+| `pnpm test:unit` | Testes unitários |
+| `pnpm test:integration` | Testes de integração |
 
 ## Deploy
 
@@ -16,55 +62,36 @@ Biolink didático para criadores de YouTube — página de links centralizada (L
 | Production | https://youtube-biolink.vercel.app | Supabase `youtube-biolink-prod` |
 | Preview (PRs) | Gerado pelo Vercel bot | Supabase `youtube-biolink-dev` |
 
-Deploy automático: todo merge em `main` publica na URL de produção. Todo PR recebe uma preview URL comentada pelo bot da Vercel.
+Deploy automático: todo merge em `main` publica na URL de produção.
+Todo PR recebe uma preview URL comentada pelo bot da Vercel.
 
-## Getting Started
+## Estrutura do projeto
 
-```bash
-# 1. Clone o repositório
-git clone https://github.com/alessandrovarela/youtube-biolink.git
-cd youtube-biolink
-
-# 2. Instale as dependências
-pnpm install
-
-# 3. Configure as variáveis de ambiente
-cp .env.example .env.local
-# Edite .env.local com suas credenciais do projeto Supabase development
-
-# 4. Inicie o servidor de desenvolvimento
-pnpm dev
+```
+youtube-biolink/
+├── app/                    # Next.js App Router
+│   └── health/route.ts     # Rota canary (GET /health)
+├── docs/
+│   ├── stories/            # Material didático por epic/story
+│   ├── architecture.md     # Arquitetura do sistema
+│   ├── prd.md              # Product Requirements Document
+│   └── brief.md            # Project Brief
+├── supabase/
+│   ├── config.toml
+│   └── migrations/         # Migration baseline
+├── tests/
+│   ├── unit/               # Testes unitários (Vitest)
+│   └── integration/        # Testes de integração
+└── .github/workflows/      # GitHub Actions CI
 ```
 
 ## Documentação
 
-### Artefatos canônicos
-
-- [Project Brief](docs/brief.md) — visão de produto, contexto e proposta de valor (v1.0, @analyst)
-- [PRD](docs/prd.md) — requisitos funcionais, NFRs, epics e stories (v1.1, @pm)
-- [Arquitetura](docs/architecture.md) — stack, rotas, schema, decisões técnicas (@architect)
-- [Frontend Spec](docs/frontend-spec.md) — mapa UX-1..UX-9, tokens, drag-and-drop a11y (v1.0, @ux-design-expert)
-
-### Design system
-
-- [Design System](docs/design/system/) — tokens, voz/tom, ícones, preview cards, ui kits
-- [Protótipos](docs/design/prototypes/) — canvas React com as 9 core screens nos 3 temas
-
-O design system também é exposto como Claude Code skill em `.claude/skills/biolink-design` (symlink) — qualquer agente pode invocá-lo durante implementação.
-
-### Trabalho iterativo
-
-- [Stories](docs/stories/) — uma story por unidade de desenvolvimento (a popular pelo @sm)
-- [Architecture (sharded)](docs/architecture/) — versão fragmentada para consumo por agentes (gerada sob demanda)
-- [Guides](docs/guides/) — guias e tutoriais didáticos (gerados durante o desenvolvimento)
-
-## Workflow AIOX
-
-1. `@analyst *create-doc project-brief` — Project Brief
-2. `@pm *create-doc prd` — PRD
-3. `@architect` — Arquitetura
-4. `@ux-design-expert *create-front-end-spec` — Frontend Spec
-5. `@sm *draft` → `@po *validate-story-draft` → `@dev *develop-story` → `@qa *qa-gate` → `@devops *push`
+- [Project Brief](docs/brief.md) — visão de produto e proposta de valor
+- [PRD](docs/prd.md) — requisitos, epics e stories
+- [Arquitetura](docs/architecture.md) — stack, rotas, schema, decisões técnicas
+- [Frontend Spec](docs/frontend-spec.md) — mapa UX, tokens de design, a11y
+- [Stories](docs/stories/) — material didático organizado por epic
 
 ---
-*Gerado por AIOX Environment Bootstrap*
+*Orquestrado com Synkra AIOX*
