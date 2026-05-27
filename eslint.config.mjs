@@ -12,6 +12,12 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Framework core (CommonJS — not subject to Next.js ESLint rules)
+    ".aiox-core/**",
+    // Claude Code hooks (CommonJS — not production app code)
+    ".claude/**",
+    // Design prototypes and docs (not production app code)
+    "docs/**",
   ]),
 ]);
 
