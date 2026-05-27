@@ -3,14 +3,37 @@
 > Next.js 16 + TypeScript strict + Tailwind 4 — inicializado via Story 1.1 (`create-next-app@latest`).
 > Orquestrado com Synkra AIOX.
 
+**Produção:** [https://youtube-biolink.vercel.app](https://youtube-biolink.vercel.app)
+
 ## Visão Geral
 
-Projeto inicializado via `@devops *environment-bootstrap`.
+Biolink didático para criadores de YouTube — página de links centralizada (Linktree-like) construída com Next.js 15 App Router, Supabase (auth + DB), Tailwind CSS e deploy automático na Vercel.
+
+## Deploy
+
+| Ambiente | URL | Banco |
+|----------|-----|-------|
+| Production | https://youtube-biolink.vercel.app | Supabase `youtube-biolink-prod` |
+| Preview (PRs) | Gerado pelo Vercel bot | Supabase `youtube-biolink-dev` |
+
+Deploy automático: todo merge em `main` publica na URL de produção. Todo PR recebe uma preview URL comentada pelo bot da Vercel.
 
 ## Getting Started
 
 ```bash
-# Adicione scripts de dev/build/test conforme o stack escolhido
+# 1. Clone o repositório
+git clone https://github.com/alessandrovarela/youtube-biolink.git
+cd youtube-biolink
+
+# 2. Instale as dependências
+pnpm install
+
+# 3. Configure as variáveis de ambiente
+cp .env.example .env.local
+# Edite .env.local com suas credenciais do projeto Supabase development
+
+# 4. Inicie o servidor de desenvolvimento
+pnpm dev
 ```
 
 ## Documentação
