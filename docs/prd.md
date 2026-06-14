@@ -35,6 +35,7 @@ O **youtube-biolink** responde a esse gap construindo um biolink estilo Linktree
 | 2026-04-17 | 0.2     | Ajustes do owner: Next.js 16; remoção de E2E/Playwright; sem Supabase local (apenas cloud); stories em pt-BR | Morgan (PM) |
 | 2026-04-17 | 1.0     | **Aprovado pelo owner (Alessandro Varela); promovido para v1.0 e liberado para handoff ao @architect**       | Morgan (PM) |
 | 2026-04-17 | 1.1     | Reconciliação com arquitetura v0.3 (simplificação didática): NFR3 e NFR18 reformulados; FR21 reformulado; Story 2.2 removida (migra para Epic 6); ACs de RLS/rate-limit removidas de 2.4, 2.6, 2.7, 3.1, 5.1, 5.2; Epic 6 (Segurança em Camadas & Hardening) adicionado pós-Epic 5; Checklist H1/H2/H4 marcadas resolvidas e H3 movida para Epic 6. **Aprovado pelo owner (Alessandro Varela); liberado para handoff ao @ux-design-expert e @sm.** | Morgan (PM) |
+| 2026-06-14 | 1.2     | Reconciliação pré-Epic 2: Story 2.9 reformulada de "Middleware de proteção de rotas" para "Proteção de rotas via auth guard de layout" (`app/dashboard/layout.tsx`), resolvendo contradição com a arquitetura v1.0 (que proíbe edge middleware no MVP); middleware edge confirmado como escopo do Epic 6. Entrega de e-mail (2.5/2.7) definida como built-in do Supabase no MVP (sem SMTP customizado). **Decisões aprovadas pelo owner (Alessandro Varela).** | Morgan (PM) |
 
 ---
 
@@ -476,20 +477,22 @@ para que minha sessão seja encerrada.
 3. Redireciona para `/` (landing ou login).
 4. Tentar acessar `/dashboard` após logout redireciona para `/login`.
 
-#### Story 2.9 — Middleware de proteção de rotas
+#### Story 2.9 — Proteção de rotas via auth guard de layout
 
 Como dev,
-eu quero middleware Next.js que proteja `/dashboard/*` e redirecione visitantes anônimos,
+eu quero um auth guard no layout do dashboard que proteja `/dashboard/*` e redirecione visitantes anônimos,
 para que rotas autenticadas sejam inacessíveis sem sessão.
+
+> **Decisão (reconciliação v1.2, 2026-06-14):** a proteção é feita por **auth guard via `app/dashboard/layout.tsx`** (Server Component que chama `getUser()` e `redirect('/login')` se ausente), **não** por `middleware.ts` na raiz. Isso alinha com a arquitetura v1.0 (§ "Auth Guard via Layout"), que define explicitamente "não há middleware de edge" no MVP. O **middleware edge** (auth guard + CSP + refresh proativo de token) é reintroduzido como unidade didática dedicada no **Epic 6 (Segurança em Camadas & Hardening)**.
 
 **Acceptance Criteria:**
 
-1. Arquivo `middleware.ts` na raiz; matcher inclui `/dashboard/:path*`.
-2. Middleware verifica cookie de sessão via `@supabase/ssr` helper server-side.
-3. Sem sessão → redirect 307 para `/login?next={pathname}`.
-4. Com sessão → `NextResponse.next()`.
-5. Middleware também refresca access token quando próximo de expirar.
-6. Teste de integração cobrindo: rota protegida sem cookie retorna redirect; com cookie válido retorna 200.
+1. `app/dashboard/layout.tsx` é um Server Component que chama `supabase.auth.getUser()` (server client com cookies via `@supabase/ssr`).
+2. Sem usuário autenticado → `redirect('/login?next={pathname}')`.
+3. Com usuário → renderiza `children` normalmente.
+4. O guard cobre toda a árvore `/dashboard/*` (todas as páginas filhas herdam a proteção do layout).
+5. Refresh proativo de token via middleware edge é **deferido para o Epic 6** — no MVP, o refresh ocorre via server client nas Server Actions/RSC.
+6. Teste de integração cobrindo: acessar `/dashboard` sem cookie de sessão retorna redirect para `/login`; com cookie válido renderiza a página (200).
 
 #### Story 2.10 — Dashboard de perfil editável
 
