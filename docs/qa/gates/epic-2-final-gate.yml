@@ -1,0 +1,58 @@
+epic: EPIC-2
+title: "Autenticação & Identidade — Final Gate"
+gate_agent: "@architect (Aria)"
+date: "2026-06-14"
+branch: "feature/epic-2-auth"
+verdict: APPROVED
+
+criteria:
+  - id: 1
+    check: "Fluxo signup → confirma e-mail → login → edita perfil → logout"
+    result: PASS
+    note: "Validado por smoke test local (owner) + rotas respondendo (307/200 corretos)."
+  - id: 2
+    check: "/dashboard inacessível sem sessão (redirect /login via layout guard)"
+    result: PASS
+    note: "Guard via app/dashboard/layout.tsx + check defensivo na page. /dashboard → 307 /login?next=/dashboard."
+  - id: 3
+    check: "Username único validado contra reservados e duplicatas"
+    result: PASS
+    note: "validateUsername (16 testes) + citext UNIQUE; duplicata rejeitada (integração)."
+  - id: 4
+    check: "Sessão persiste por cookies server-side (@supabase/ssr)"
+    result: PASS
+    note: "createServerClient com getAll/setAll; signIn via signInWithPassword."
+  - id: 5
+    check: "Authz app-layer: usuário não lê/escreve dados de outro (filtro auth.uid())"
+    result: PASS
+    note: "updateProfile filtra .eq('id', user.id). Sem RLS no MVP (NFR3); RLS real no Epic 6."
+  - id: 6
+    check: "lint + test + build passando"
+    result: PASS
+    note: "lint, typecheck, unit 19/19, integration 8/8, build — todos verdes localmente."
+  - id: 7
+    check: "Conventional commits em todos os commits do epic"
+    result: PASS
+    note: "7 commits, todos no padrão feat/fix/test com [Story X.Y]."
+
+architectural_conformance:
+  middleware_absent: true          # guard via layout (decisão v1.2)
+  no_service_role_in_app: true     # service role só em testes
+  no_rls_in_migrations: true       # app-layer authz no MVP (NFR3)
+  server_actions_convention: true  # ActionResult, validação inline, nunca lança (exceto redirect)
+
+concerns:
+  - severity: medium
+    category: ci
+    description: "CI sem SUPABASE_SERVICE_ROLE_KEY_DEV — testes de integração skipam no GitHub Actions."
+    recommendation: "@devops adiciona o secret (gh secret set SUPABASE_SERVICE_ROLE_KEY_DEV)."
+  - severity: medium
+    category: infra
+    description: "Migration profiles aplicada apenas no projeto dev."
+    recommendation: "@devops aplica em prod (supabase db push) no fechamento do epic."
+  - severity: low
+    category: tests
+    description: "Testes de integração de auth cobrem nível Supabase (anon/admin), não a action completa (runtime Next)."
+    recommendation: "Aceito p/ MVP (sem E2E/Playwright). Reavaliar se Playwright entrar em fase futura."
+
+decision: "APPROVED — Epic 2 liberado para push/PR (@devops). Concerns são operacionais, não bloqueiam."
