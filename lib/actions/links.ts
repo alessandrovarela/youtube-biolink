@@ -4,7 +4,7 @@
 // Convenção § 5.1: 'use server', getUser(), validação inline (checks TS +
 // sanitizeLinkUrl), query filtrada por profile_id = user.id (authz app-layer,
 // sem RLS no MVP), retorna ActionResult (nunca lança).
-// Catálogo § 5.2: createLink / updateLink / deleteLink / toggleLinkActive.
+// Catálogo § 5.2: createLink / updateLink / deleteLink / toggleLinkActive / reorderLinks.
 // [Source: architecture.md § 5.1, § 5.2; lib/validation/url.ts (Story 3.2)]
 
 import { revalidatePath } from 'next/cache';
@@ -140,6 +140,48 @@ export async function updateLink(input: {
 
   revalidateLinks();
   return { ok: true, data: data as Link };
+}
+
+// ── reorderLinks ──────────────────────────────────────────────────────
+// Story 3.4 — persiste a nova ordem (drag-and-drop / teclado) via update em
+// lote de `position` (= índice no array). Valida que TODOS os ids pertencem ao
+// usuário (authz app-layer): nunca reordena links de outro. [Source: § 5.2]
+export async function reorderLinks(input: { ids: string[] }): Promise<ActionResult> {
+  const supabase = await createServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: NOT_SIGNED_IN };
+
+  const ids = Array.isArray(input?.ids) ? input.ids.map((id) => (id ?? '').trim()) : [];
+  if (ids.length === 0) return { ok: false, error: 'Nada para reordenar' };
+  if (ids.some((id) => !id)) return { ok: false, error: 'Link inválido' };
+  if (new Set(ids).size !== ids.length) return { ok: false, error: 'IDs duplicados' };
+
+  // Ownership: todos os ids informados devem pertencer ao usuário autenticado.
+  const { data: owned, error: ownErr } = await supabase
+    .from('links')
+    .select('id')
+    .eq('profile_id', user.id);
+  if (ownErr) return { ok: false, error: 'Não foi possível reordenar os links.' };
+  const ownedIds = new Set((owned ?? []).map((row) => (row as { id: string }).id));
+  if (ids.some((id) => !ownedIds.has(id))) {
+    return { ok: false, error: 'Link não encontrado' };
+  }
+
+  // Update em lote: position = índice no array (ordem desejada). Cada update
+  // filtra por id + profile_id (dupla proteção authz).
+  for (let position = 0; position < ids.length; position++) {
+    const { error } = await supabase
+      .from('links')
+      .update({ position })
+      .eq('id', ids[position])
+      .eq('profile_id', user.id);
+    if (error) return { ok: false, error: 'Não foi possível reordenar os links.' };
+  }
+
+  revalidateLinks();
+  return { ok: true };
 }
 
 // ── deleteLink ────────────────────────────────────────────────────────

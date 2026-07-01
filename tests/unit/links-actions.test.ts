@@ -14,7 +14,13 @@ vi.mock('next/cache', () => ({
   revalidatePath: vi.fn(),
 }));
 
-import { createLink, updateLink, deleteLink, toggleLinkActive } from '@/lib/actions/links';
+import {
+  createLink,
+  updateLink,
+  deleteLink,
+  toggleLinkActive,
+  reorderLinks,
+} from '@/lib/actions/links';
 
 // ── Infra de mock do query builder ────────────────────────────────────
 type QueryResult = { data?: unknown; error?: unknown; count?: number | null };
@@ -243,5 +249,69 @@ describe('toggleLinkActive', () => {
     // @ts-expect-error — teste de guarda de runtime
     const res = await toggleLinkActive({ id: 'l1', is_active: 'sim' });
     expect(res).toEqual({ ok: false, error: 'Estado inválido' });
+  });
+});
+
+// ── reorderLinks ───────────────────────────────────────────────────────
+/** Extrai os args do primeiro argumento de cada chamada de update registrada. */
+function updateCalls(client: MockClient): unknown[] {
+  return client.log.filter(([name]) => name === 'update').map(([, args]) => args[0]);
+}
+
+describe('reorderLinks', () => {
+  it('rejeita quando não autenticado', async () => {
+    mockClient = makeClient(null, []);
+    const res = await reorderLinks({ ids: ['l1', 'l2'] });
+    expect(res).toEqual({ ok: false, error: 'Faça login para continuar' });
+  });
+
+  it('rejeita lista de ids vazia', async () => {
+    mockClient = makeClient(USER, []);
+    const res = await reorderLinks({ ids: [] });
+    expect(res).toEqual({ ok: false, error: 'Nada para reordenar' });
+  });
+
+  it('rejeita ids duplicados', async () => {
+    mockClient = makeClient(USER, []);
+    const res = await reorderLinks({ ids: ['l1', 'l1'] });
+    expect(res).toEqual({ ok: false, error: 'IDs duplicados' });
+  });
+
+  it('rejeita quando algum id não pertence ao usuário (ownership) e não faz nenhum update', async () => {
+    // Ownership query devolve apenas l1 e l2; 'l3' é de outro usuário.
+    mockClient = makeClient(USER, [{ data: [{ id: 'l1' }, { id: 'l2' }] }]);
+    const res = await reorderLinks({ ids: ['l1', 'l2', 'l3'] });
+    expect(res).toEqual({ ok: false, error: 'Link não encontrado' });
+    expect(updateCalls(mockClient)).toEqual([]); // nenhum update disparado
+  });
+
+  it('monta o update em lote correto: position = índice, filtrando por id + profile_id', async () => {
+    mockClient = makeClient(USER, [
+      { data: [{ id: 'l1' }, { id: 'l2' }, { id: 'l3' }] }, // ownership
+      {}, // update l3 → position 0
+      {}, // update l1 → position 1
+      {}, // update l2 → position 2
+    ]);
+    const res = await reorderLinks({ ids: ['l3', 'l1', 'l2'] });
+    expect(res).toEqual({ ok: true });
+
+    // position atribuída conforme a ordem do array.
+    expect(updateCalls(mockClient)).toEqual([{ position: 0 }, { position: 1 }, { position: 2 }]);
+
+    // Toda query de ownership/update filtra pelo profile_id do usuário.
+    expect(eqCalls(mockClient)).toEqual(
+      expect.arrayContaining([
+        ['profile_id', USER],
+        ['id', 'l3'],
+        ['id', 'l1'],
+        ['id', 'l2'],
+      ])
+    );
+  });
+
+  it('rejeita id vazio/inválido na lista', async () => {
+    mockClient = makeClient(USER, []);
+    const res = await reorderLinks({ ids: ['l1', '  '] });
+    expect(res).toEqual({ ok: false, error: 'Link inválido' });
   });
 });

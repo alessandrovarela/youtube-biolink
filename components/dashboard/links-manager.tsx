@@ -3,8 +3,34 @@
 // Story 3.3 — Gestor de links (client). Form inline de criação + lista com
 // edição inline, toggle is_active e deleção com confirmação inline (sem
 // window.confirm, que bloqueia). Feedback inline; optimistic em criar e toggle.
+// Story 3.4 — reordenação via drag-and-drop (@dnd-kit) + alternativa por
+// teclado (botões ↑/↓); optimistic + persistência via reorderLinks (update em
+// lote de position). [Source: architecture.md § 3.1, § 5.2]
 import { useState, useTransition, type FormEvent } from 'react';
-import { createLink, updateLink, deleteLink, toggleLinkActive } from '@/lib/actions/links';
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import {
+  createLink,
+  updateLink,
+  deleteLink,
+  toggleLinkActive,
+  reorderLinks,
+} from '@/lib/actions/links';
 import type { Link } from '@/lib/types';
 
 const MAX_LINKS = 30;
@@ -16,9 +42,54 @@ export function LinksManager({ initialLinks }: { initialLinks: Link[] }) {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [reorderError, setReorderError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const [, startReorder] = useTransition();
+
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
 
   const atLimit = links.length >= MAX_LINKS;
+
+  /** Aplica a nova ordem (optimistic) e persiste via reorderLinks; reconcilia no erro. */
+  function persistOrder(next: Link[], previous: Link[]) {
+    setReorderError(null);
+    setLinks(next);
+    startReorder(async () => {
+      const res = await reorderLinks({ ids: next.map((l) => l.id) });
+      if (!res.ok) {
+        setLinks(previous); // rollback: mantém a ordem persistida no servidor
+        setReorderError(res.error);
+      }
+    });
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = links.findIndex((l) => l.id === active.id);
+    const newIndex = links.findIndex((l) => l.id === over.id);
+    if (oldIndex === -1 || newIndex === -1) return;
+    persistOrder(arrayMove(links, oldIndex, newIndex), links);
+  }
+
+  /** Alternativa por teclado: move o item uma posição e refoca o botão correto. */
+  function moveLink(id: string, direction: -1 | 1) {
+    const index = links.findIndex((l) => l.id === id);
+    const target = index + direction;
+    if (index === -1 || target < 0 || target >= links.length) return;
+    persistOrder(arrayMove(links, index, target), links);
+
+    // Foco: mantém a mesma direção se ainda houver movimento possível; senão,
+    // inverte (o botão original ficará desabilitado no topo/fim da lista).
+    const canKeepDir = direction === -1 ? target > 0 : target < links.length - 1;
+    const focusDir = canKeepDir ? direction : ((direction * -1) as -1 | 1);
+    requestAnimationFrame(() => {
+      document.getElementById(`move-${focusDir === -1 ? 'up' : 'down'}-${id}`)?.focus();
+    });
+  }
 
   function handleCreate(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -109,18 +180,105 @@ export function LinksManager({ initialLinks }: { initialLinks: Link[] }) {
         </button>
       </form>
 
+      {reorderError && (
+        <p role="alert" className="text-sm text-red-600">
+          {reorderError}
+        </p>
+      )}
+
       {links.length === 0 ? (
         <p className="text-sm text-gray-500">Nenhum link ainda. Adicione o primeiro acima.</p>
       ) : (
-        <ul className="flex flex-col gap-3">
-          {links.map((link) => (
-            <li key={link.id}>
-              <LinkItem link={link} onChange={replaceLink} onRemove={removeLink} />
-            </li>
-          ))}
-        </ul>
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableContext items={links.map((l) => l.id)} strategy={verticalListSortingStrategy}>
+            <ul className="flex flex-col gap-3">
+              {links.map((link, index) => (
+                <SortableLinkItem
+                  key={link.id}
+                  link={link}
+                  index={index}
+                  count={links.length}
+                  onChange={replaceLink}
+                  onRemove={removeLink}
+                  onMove={moveLink}
+                />
+              ))}
+            </ul>
+          </SortableContext>
+        </DndContext>
       )}
     </div>
+  );
+}
+
+// Linha sortável: envolve o LinkItem com o handle de drag (@dnd-kit) e a
+// alternativa por teclado (↑/↓). O card (borda/padding) vive aqui; o LinkItem
+// renderiza apenas o conteúdo. [Source: prd.md Story 3.4 AC1/AC3]
+function SortableLinkItem({
+  link,
+  index,
+  count,
+  onChange,
+  onRemove,
+  onMove,
+}: {
+  link: Link;
+  index: number;
+  count: number;
+  onChange: (updated: Link) => void;
+  onRemove: (id: string) => void;
+  onMove: (id: string, direction: -1 | 1) => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: link.id,
+  });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.6 : 1,
+  };
+
+  return (
+    <li
+      ref={setNodeRef}
+      style={style}
+      className="flex items-stretch gap-2 rounded border border-gray-200 p-3"
+    >
+      <div className="flex shrink-0 flex-col items-center gap-1">
+        <button
+          type="button"
+          {...attributes}
+          {...listeners}
+          aria-label={`Arrastar para reordenar ${link.title}`}
+          className="cursor-grab touch-none rounded px-1 text-gray-400 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-900 active:cursor-grabbing"
+        >
+          ⠿
+        </button>
+        <button
+          id={`move-up-${link.id}`}
+          type="button"
+          onClick={() => onMove(link.id, -1)}
+          disabled={index === 0}
+          aria-label={`Mover ${link.title} para cima`}
+          className="rounded border border-gray-300 px-1 text-xs leading-none disabled:opacity-40"
+        >
+          ↑
+        </button>
+        <button
+          id={`move-down-${link.id}`}
+          type="button"
+          onClick={() => onMove(link.id, 1)}
+          disabled={index === count - 1}
+          aria-label={`Mover ${link.title} para baixo`}
+          className="rounded border border-gray-300 px-1 text-xs leading-none disabled:opacity-40"
+        >
+          ↓
+        </button>
+      </div>
+      <div className="min-w-0 flex-1">
+        <LinkItem link={link} onChange={onChange} onRemove={onRemove} />
+      </div>
+    </li>
   );
 }
 
@@ -194,7 +352,7 @@ function LinkItem({
   }
 
   return (
-    <div className="flex flex-col gap-2 rounded border border-gray-200 p-3">
+    <div className="flex flex-col gap-2">
       {editing ? (
         <div className="flex flex-col gap-2">
           <input
