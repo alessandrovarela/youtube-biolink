@@ -54,3 +54,34 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+  # ────────────────────────────────────────────────────────────
+  # CD — aplica migrations em produção após merge na main.
+  # Roda só no push da main, depois de `quality` passar. Usa o
+  # environment `production` (configure required reviewers no GitHub
+  # para exigir aprovação manual em migrations sensíveis/destrutivas).
+  # Secrets necessários: SUPABASE_ACCESS_TOKEN, SUPABASE_DB_PASSWORD,
+  # SUPABASE_PROJECT_REF_PROD.
+  # ────────────────────────────────────────────────────────────
+  migrate-production:
+    name: Apply migrations to production
+    needs: quality
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Link & push migrations to production
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_PROJECT_REF_PROD: ${{ secrets.SUPABASE_PROJECT_REF_PROD }}
+        run: |
+          supabase link --project-ref "$SUPABASE_PROJECT_REF_PROD"
+          supabase db push
