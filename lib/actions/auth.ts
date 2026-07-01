@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
+import { headers } from 'next/headers';
 import { createServerClient } from '@/lib/supabase';
 import { validateUsername, normalizeUsername } from '@/lib/validation/username';
 import { usernameErrorMessage, isValidEmail } from '@/lib/validation/messages';
@@ -94,8 +95,19 @@ export async function requestPasswordReset(_prev: FormState, formData: FormData)
   const email = str(formData, 'email').trim().toLowerCase();
   if (!isValidEmail(email)) return { ok: false, error: 'E-mail inválido' };
 
+  // Origin da request para montar o link de retorno. Server Actions sempre
+  // enviam o header Origin (proteção CSRF do Next); fallback via host.
+  const h = await headers();
+  const origin =
+    h.get('origin') ??
+    (h.get('host') ? `${h.get('x-forwarded-proto') ?? 'http'}://${h.get('host')}` : '');
+
   const supabase = await createServerClient();
-  await supabase.auth.resetPasswordForEmail(email);
+  // O link de recuperação passa pelo /auth/callback (troca o code por sessão de
+  // recovery) e de lá segue para /reset-password/confirm (definir nova senha).
+  await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: `${origin}/auth/callback?next=/reset-password/confirm`,
+  });
   // Resposta neutra (não enumerar contas).
   return { ok: true };
 }

@@ -1,6 +1,7 @@
 'use client';
 
 import { useActionState } from 'react';
+import Link from 'next/link';
 import { requestPasswordReset } from '@/lib/actions/auth';
 import { Field } from '@/components/ui/field';
 import { SubmitButton } from '@/components/ui/submit-button';
@@ -24,9 +25,9 @@ export default function ResetPasswordPage() {
         )}
         <SubmitButton>Enviar link</SubmitButton>
       </form>
-      <a href="/login" className="text-sm underline">
+      <Link href="/login" className="text-sm underline">
         Voltar ao login
-      </a>
+      </Link>
     </main>
   );
 }
