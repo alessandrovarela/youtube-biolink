@@ -1,6 +1,7 @@
 'use client';
 
 import { useActionState } from 'react';
+import Link from 'next/link';
 import { resendConfirmation } from '@/lib/actions/auth';
 import { Field } from '@/components/ui/field';
 import { SubmitButton } from '@/components/ui/submit-button';
@@ -26,9 +27,9 @@ export default function CheckEmailPage() {
         </form>
       </details>
 
-      <a href="/login" className="text-sm underline">
+      <Link href="/login" className="text-sm underline">
         Ir para o login
-      </a>
+      </Link>
     </main>
   );
 }

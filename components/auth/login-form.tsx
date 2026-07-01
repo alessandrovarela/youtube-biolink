@@ -1,6 +1,7 @@
 'use client';
 
 import { useActionState } from 'react';
+import Link from 'next/link';
 import { signIn } from '@/lib/actions/auth';
 import { Field } from '@/components/ui/field';
 import { SubmitButton } from '@/components/ui/submit-button';
@@ -24,12 +25,12 @@ export function LoginForm({ confirmed, reset }: { confirmed: boolean; reset: boo
         <SubmitButton>Entrar</SubmitButton>
       </form>
       <div className="flex justify-between text-sm text-gray-600">
-        <a href="/reset-password" className="underline">
+        <Link href="/reset-password" className="underline">
           Esqueci minha senha
-        </a>
-        <a href="/signup" className="underline">
+        </Link>
+        <Link href="/signup" className="underline">
           Criar conta
-        </a>
+        </Link>
       </div>
     </main>
   );

@@ -1,6 +1,7 @@
 'use client';
 
 import { useActionState } from 'react';
+import Link from 'next/link';
 import { signUp } from '@/lib/actions/auth';
 import { Field } from '@/components/ui/field';
 import { SubmitButton } from '@/components/ui/submit-button';
@@ -34,9 +35,9 @@ export default function SignupPage() {
       </form>
       <p className="text-sm text-gray-600">
         Já tem conta?{' '}
-        <a href="/login" className="underline">
+        <Link href="/login" className="underline">
           Entrar
-        </a>
+        </Link>
       </p>
     </main>
   );
