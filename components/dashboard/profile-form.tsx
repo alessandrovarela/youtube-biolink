@@ -1,9 +1,14 @@
 'use client';
 
+// Story 2.10 — form de perfil. Story 4.2 — migrado para os primitivos do
+// design system (Input, Textarea, Avatar, Button, Toast).
 import { useActionState, useState } from 'react';
 import { updateProfile } from '@/lib/actions/profile';
-import { Field } from '@/components/ui/field';
-import { SubmitButton } from '@/components/ui/submit-button';
+import { Input } from '@/components/ui/Input';
+import { Textarea } from '@/components/ui/Textarea';
+import { Button } from '@/components/ui/Button';
+import { Avatar } from '@/components/ui/Avatar';
+import { Toast } from '@/components/ui/Toast';
 
 export type ProfileData = {
   username: string;
@@ -15,87 +20,80 @@ export type ProfileData = {
 const MAX_BIO = 160;
 
 export function ProfileForm({ profile }: { profile: ProfileData }) {
-  const [state, action] = useActionState(updateProfile, null);
+  const [state, action, pending] = useActionState(updateProfile, null);
   const [bio, setBio] = useState(profile.bio ?? '');
   const [avatarUrl, setAvatarUrl] = useState(profile.avatar_url ?? '');
-  const [avatarError, setAvatarError] = useState(false);
+  const [showToast, setShowToast] = useState(false);
 
   const fieldErrors = state && !state.ok ? (state.fieldErrors ?? {}) : {};
   const formError = state && !state.ok && !state.fieldErrors ? state.error : null;
-  const initials = (profile.display_name || profile.username).slice(0, 2).toUpperCase();
+
+  // Contador de bio: vira feedback de erro (vermelho + aria-invalid) ao passar
+  // do limite — preserva o comportamento ao vivo do Epic 2 após a migração 4.2.
+  const bioOverLimit = bio.length > MAX_BIO;
+  const bioCounter = `${bio.length}/${MAX_BIO}`;
+
+  // Dispara o toast quando um novo resultado de sucesso chega (ajuste de estado
+  // durante o render em vez de effect — padrão recomendado pelo React).
+  const [prevState, setPrevState] = useState(state);
+  if (state !== prevState) {
+    setPrevState(state);
+    if (state?.ok) setShowToast(true);
+  }
 
   return (
     <form action={action} className="flex flex-col gap-4">
       <div className="flex items-center gap-4">
-        {avatarUrl && !avatarError ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={avatarUrl}
-            alt="Avatar"
-            className="h-16 w-16 rounded-full object-cover"
-            onError={() => setAvatarError(true)}
-          />
-        ) : (
-          <div className="flex h-16 w-16 items-center justify-center rounded-full bg-gray-200 font-medium">
-            {initials}
-          </div>
-        )}
-        <div className="text-sm text-gray-600">
+        <Avatar
+          src={avatarUrl || null}
+          displayName={profile.display_name || profile.username}
+          size={64}
+        />
+        <div className="text-sm text-muted-fg">
           @{profile.username}
-          <span className="ml-2 text-gray-400">(username não editável no MVP)</span>
+          <span className="ml-2 opacity-70">(username não editável no MVP)</span>
         </div>
       </div>
 
-      <Field
+      <Input
         label="Nome de exibição"
         name="display_name"
         defaultValue={profile.display_name ?? ''}
         error={fieldErrors.display_name}
       />
 
-      <div className="flex flex-col gap-1">
-        <label htmlFor="bio" className="text-sm font-medium">
-          Bio
-        </label>
-        <textarea
-          id="bio"
-          name="bio"
-          value={bio}
-          onChange={(e) => setBio(e.target.value)}
-          rows={3}
-          aria-invalid={fieldErrors.bio ? true : undefined}
-          className="rounded border border-gray-300 px-3 py-2 outline-none focus:border-gray-900"
-        />
-        <span className={`text-xs ${bio.length > MAX_BIO ? 'text-red-600' : 'text-gray-500'}`}>
-          {bio.length}/{MAX_BIO}
-        </span>
-        {fieldErrors.bio && (
-          <span role="alert" className="text-sm text-red-600">
-            {fieldErrors.bio}
-          </span>
-        )}
-      </div>
+      <Textarea
+        label="Bio"
+        name="bio"
+        value={bio}
+        onChange={(e) => setBio(e.target.value)}
+        rows={3}
+        error={fieldErrors.bio ?? (bioOverLimit ? bioCounter : undefined)}
+        hint={bioOverLimit ? undefined : bioCounter}
+      />
 
-      <Field
+      <Input
         label="URL do avatar"
         name="avatar_url"
         type="url"
         value={avatarUrl}
-        onChange={(e) => {
-          setAvatarUrl(e.target.value);
-          setAvatarError(false);
-        }}
+        onChange={(e) => setAvatarUrl(e.target.value)}
         error={fieldErrors.avatar_url}
       />
 
       {formError && (
-        <p role="alert" className="text-sm text-red-600">
+        <p role="alert" className="text-sm text-danger">
           {formError}
         </p>
       )}
-      {state?.ok && <p className="text-sm text-green-700">Perfil atualizado!</p>}
 
-      <SubmitButton>Salvar perfil</SubmitButton>
+      <Button type="submit" loading={pending} className="self-start">
+        Salvar perfil
+      </Button>
+
+      {showToast && (
+        <Toast message="Perfil atualizado!" variant="success" onDismiss={() => setShowToast(false)} />
+      )}
     </form>
   );
 }

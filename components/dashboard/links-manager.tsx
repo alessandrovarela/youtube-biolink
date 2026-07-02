@@ -6,6 +6,7 @@
 // Story 3.4 — reordenação via drag-and-drop (@dnd-kit) + alternativa por
 // teclado (botões ↑/↓); optimistic + persistência via reorderLinks (update em
 // lote de position). [Source: architecture.md § 3.1, § 5.2]
+// Story 4.2 — migrado para os primitivos do design system (Card/Input/Button/Toast).
 import { useState, useTransition, type FormEvent } from 'react';
 import {
   DndContext,
@@ -32,6 +33,11 @@ import {
   reorderLinks,
 } from '@/lib/actions/links';
 import type { Link } from '@/lib/types';
+import { Card } from '@/components/ui/Card';
+import { Input } from '@/components/ui/Input';
+import { Button } from '@/components/ui/Button';
+import { Toast } from '@/components/ui/Toast';
+import { cn } from '@/lib/cn';
 
 const MAX_LINKS = 30;
 
@@ -121,73 +127,48 @@ export function LinksManager({ initialLinks }: { initialLinks: Link[] }) {
 
   return (
     <div className="flex flex-col gap-6">
-      <form onSubmit={handleCreate} className="flex flex-col gap-3 rounded border border-gray-200 p-4">
-        <h2 className="text-sm font-semibold text-gray-700">Adicionar link</h2>
-        <div className="flex flex-col gap-1">
-          <label htmlFor="new-title" className="text-sm font-medium">
-            Título
-          </label>
-          <input
+      <Card>
+        <form onSubmit={handleCreate} className="flex flex-col gap-3">
+          <h2 className="text-sm font-semibold text-muted-fg">Adicionar link</h2>
+          <Input
+            label="Título"
             id="new-title"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             maxLength={60}
-            aria-invalid={errors.title ? true : undefined}
-            className="rounded border border-gray-300 px-3 py-2 outline-none focus:border-gray-900"
+            error={errors.title}
           />
-          {errors.title && (
-            <span role="alert" className="text-sm text-red-600">
-              {errors.title}
-            </span>
-          )}
-        </div>
-        <div className="flex flex-col gap-1">
-          <label htmlFor="new-url" className="text-sm font-medium">
-            URL
-          </label>
-          <input
+          <Input
+            label="URL"
             id="new-url"
             type="url"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             placeholder="https://exemplo.com"
-            aria-invalid={errors.url ? true : undefined}
-            className="rounded border border-gray-300 px-3 py-2 outline-none focus:border-gray-900"
+            error={errors.url}
           />
-          {errors.url && (
-            <span role="alert" className="text-sm text-red-600">
-              {errors.url}
-            </span>
+          {formError && (
+            <p role="alert" className="text-sm text-danger">
+              {formError}
+            </p>
           )}
-        </div>
-        {formError && (
-          <p role="alert" className="text-sm text-red-600">
-            {formError}
-          </p>
-        )}
-        {success && <p className="text-sm text-green-700">{success}</p>}
-        {atLimit && (
-          <p className="text-sm text-amber-700">
-            Você atingiu o limite de {MAX_LINKS} links.
-          </p>
-        )}
-        <button
-          type="submit"
-          disabled={pending || atLimit}
-          className="self-start rounded bg-gray-900 px-4 py-2 font-medium text-white disabled:opacity-60"
-        >
-          {pending ? 'Salvando…' : 'Adicionar'}
-        </button>
-      </form>
+          {atLimit && (
+            <p className="text-sm text-warning">Você atingiu o limite de {MAX_LINKS} links.</p>
+          )}
+          <Button type="submit" loading={pending} disabled={atLimit} className="self-start">
+            Adicionar
+          </Button>
+        </form>
+      </Card>
 
       {reorderError && (
-        <p role="alert" className="text-sm text-red-600">
+        <p role="alert" className="text-sm text-danger">
           {reorderError}
         </p>
       )}
 
       {links.length === 0 ? (
-        <p className="text-sm text-gray-500">Nenhum link ainda. Adicione o primeiro acima.</p>
+        <p className="text-sm text-muted-fg">Nenhum link ainda. Adicione o primeiro acima.</p>
       ) : (
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
           <SortableContext items={links.map((l) => l.id)} strategy={verticalListSortingStrategy}>
@@ -207,6 +188,8 @@ export function LinksManager({ initialLinks }: { initialLinks: Link[] }) {
           </SortableContext>
         </DndContext>
       )}
+
+      {success && <Toast message={success} variant="success" onDismiss={() => setSuccess(null)} />}
     </div>
   );
 }
@@ -238,11 +221,14 @@ function SortableLinkItem({
     opacity: isDragging ? 0.6 : 1,
   };
 
+  const iconBtn =
+    'rounded-md text-muted-fg transition-colors hover:bg-muted hover:text-fg disabled:opacity-40';
+
   return (
     <li
       ref={setNodeRef}
       style={style}
-      className="flex items-stretch gap-2 rounded border border-gray-200 p-3"
+      className="flex items-stretch gap-2 rounded-lg border border-border bg-surface p-3"
     >
       <div className="flex shrink-0 flex-col items-center gap-1">
         <button
@@ -250,7 +236,7 @@ function SortableLinkItem({
           {...attributes}
           {...listeners}
           aria-label={`Arrastar para reordenar ${link.title}`}
-          className="cursor-grab touch-none rounded px-1 text-gray-400 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-900 active:cursor-grabbing"
+          className={cn('cursor-grab touch-none px-1 active:cursor-grabbing', iconBtn)}
         >
           ⠿
         </button>
@@ -260,7 +246,7 @@ function SortableLinkItem({
           onClick={() => onMove(link.id, -1)}
           disabled={index === 0}
           aria-label={`Mover ${link.title} para cima`}
-          className="rounded border border-gray-300 px-1 text-xs leading-none disabled:opacity-40"
+          className={cn('border border-border px-1 text-xs leading-none', iconBtn)}
         >
           ↑
         </button>
@@ -270,7 +256,7 @@ function SortableLinkItem({
           onClick={() => onMove(link.id, 1)}
           disabled={index === count - 1}
           aria-label={`Mover ${link.title} para baixo`}
-          className="rounded border border-gray-300 px-1 text-xs leading-none disabled:opacity-40"
+          className={cn('border border-border px-1 text-xs leading-none', iconBtn)}
         >
           ↓
         </button>
@@ -355,111 +341,99 @@ function LinkItem({
     <div className="flex flex-col gap-2">
       {editing ? (
         <div className="flex flex-col gap-2">
-          <input
+          <Input
             aria-label="Título"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             maxLength={60}
-            aria-invalid={errors.title ? true : undefined}
-            className="rounded border border-gray-300 px-3 py-2 outline-none focus:border-gray-900"
+            error={errors.title}
           />
-          {errors.title && (
-            <span role="alert" className="text-sm text-red-600">
-              {errors.title}
-            </span>
-          )}
-          <input
+          <Input
             aria-label="URL"
             type="url"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
-            aria-invalid={errors.url ? true : undefined}
-            className="rounded border border-gray-300 px-3 py-2 outline-none focus:border-gray-900"
+            error={errors.url}
           />
-          {errors.url && (
-            <span role="alert" className="text-sm text-red-600">
-              {errors.url}
-            </span>
-          )}
           <div className="flex gap-2">
-            <button
+            <Button type="button" size="sm" onClick={save} loading={pending}>
+              Salvar
+            </Button>
+            <Button
               type="button"
-              onClick={save}
-              disabled={pending}
-              className="rounded bg-gray-900 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-60"
-            >
-              {pending ? 'Salvando…' : 'Salvar'}
-            </button>
-            <button
-              type="button"
+              size="sm"
+              variant="secondary"
               onClick={() => setEditing(false)}
               disabled={pending}
-              className="rounded border border-gray-300 px-3 py-1.5 text-sm disabled:opacity-60"
             >
               Cancelar
-            </button>
+            </Button>
           </div>
         </div>
       ) : (
         <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <p className={`truncate font-medium ${link.is_active ? '' : 'text-gray-400'}`}>
-              {link.title}
-            </p>
-            <p className="truncate text-sm text-gray-500">{link.url}</p>
+          <div className={cn('min-w-0', link.is_active ? '' : 'opacity-55')}>
+            <p className="truncate font-medium">{link.title}</p>
+            <p className="truncate font-mono text-sm text-muted-fg">{link.url}</p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <button
+            <Button
               type="button"
+              size="sm"
+              variant={link.is_active ? 'secondary' : 'ghost'}
               onClick={toggle}
               disabled={pending}
               aria-pressed={link.is_active}
-              className="rounded border border-gray-300 px-2 py-1 text-xs disabled:opacity-60"
             >
               {link.is_active ? 'Ativo' : 'Inativo'}
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              size="sm"
+              variant="ghost"
               onClick={startEdit}
               disabled={pending}
-              className="rounded border border-gray-300 px-2 py-1 text-xs disabled:opacity-60"
             >
               Editar
-            </button>
+            </Button>
             {confirming ? (
               <span className="flex items-center gap-1">
-                <button
+                <Button
                   type="button"
+                  size="sm"
+                  variant="destructive"
                   onClick={remove}
-                  disabled={pending}
-                  className="rounded bg-red-600 px-2 py-1 text-xs font-medium text-white disabled:opacity-60"
+                  loading={pending}
                 >
                   Confirmar
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
+                  size="sm"
+                  variant="secondary"
                   onClick={() => setConfirming(false)}
                   disabled={pending}
-                  className="rounded border border-gray-300 px-2 py-1 text-xs disabled:opacity-60"
                 >
                   Cancelar
-                </button>
+                </Button>
               </span>
             ) : (
-              <button
+              <Button
                 type="button"
+                size="sm"
+                variant="ghost"
                 onClick={() => setConfirming(true)}
                 disabled={pending}
-                className="rounded border border-red-300 px-2 py-1 text-xs text-red-600 disabled:opacity-60"
+                className="text-danger"
               >
                 Deletar
-              </button>
+              </Button>
             )}
           </div>
         </div>
       )}
       {message && (
-        <p role="alert" className="text-sm text-red-600">
+        <p role="alert" className="text-sm text-danger">
           {message}
         </p>
       )}

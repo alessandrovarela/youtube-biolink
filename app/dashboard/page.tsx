@@ -1,9 +1,10 @@
 // Story 2.10 — Dashboard de perfil. Protegido pelo auth guard do layout (2.9).
+// Story 4.2 — nav/logout movidos para a topbar do layout; perfil em Card.
 import { redirect } from 'next/navigation';
-import NextLink from 'next/link';
 import { createServerClient } from '@/lib/supabase';
 import { ProfileForm, type ProfileData } from '@/components/dashboard/profile-form';
-import { LogoutButton } from '@/components/auth/logout-button';
+import { ThemeSelector } from '@/components/dashboard/theme-selector';
+import { Card } from '@/components/ui/Card';
 
 export default async function DashboardPage() {
   const supabase = await createServerClient();
@@ -22,18 +23,21 @@ export default async function DashboardPage() {
     .single();
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-lg flex-col gap-6 p-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Seu perfil</h1>
-        <LogoutButton />
-      </div>
-      <NextLink
-        href="/dashboard/links"
-        className="inline-flex w-fit items-center gap-1 rounded border border-gray-300 px-3 py-1.5 text-sm font-medium hover:bg-gray-50"
-      >
-        Gerenciar meus links →
-      </NextLink>
-      {profile && <ProfileForm profile={profile as ProfileData} />}
-    </main>
+    <div className="flex flex-col gap-6">
+      <h1 className="text-2xl font-bold">Seu perfil</h1>
+      {profile && (
+        <Card>
+          <ProfileForm profile={profile as ProfileData} />
+        </Card>
+      )}
+
+      <Card>
+        <div className="flex flex-col gap-1">
+          <h2 className="text-lg font-semibold">Aparência</h2>
+          <p className="text-sm text-muted-fg">Escolha o tema do seu painel.</p>
+        </div>
+        <ThemeSelector />
+      </Card>
+    </div>
   );
 }

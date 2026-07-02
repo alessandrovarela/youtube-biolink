@@ -1,12 +1,14 @@
-import { signOut } from '@/lib/actions/auth';
-
 // Story 2.8 — botão de logout (form action chama a Server Action signOut).
+// Story 4.2 — usa o primitivo Button (variant ghost).
+import { signOut } from '@/lib/actions/auth';
+import { Button } from '@/components/ui/Button';
+
 export function LogoutButton() {
   return (
     <form action={signOut}>
-      <button type="submit" className="text-sm text-gray-600 underline">
+      <Button type="submit" variant="ghost" size="sm">
         Sair
-      </button>
+      </Button>
     </form>
   );
 }

@@ -1,6 +1,6 @@
 // Story 3.3 — Página de gestão de links. Protegida pelo auth guard do layout (2.9).
+// Story 4.2 — nav movido para a topbar do layout.
 import { redirect } from 'next/navigation';
-import NextLink from 'next/link';
 import { createServerClient } from '@/lib/supabase';
 import { LinksManager } from '@/components/dashboard/links-manager';
 import type { Link } from '@/lib/types';
@@ -21,14 +21,9 @@ export default async function LinksPage() {
     .order('position', { ascending: true });
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-lg flex-col gap-6 p-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Seus links</h1>
-        <NextLink href="/dashboard" className="text-sm text-gray-600 underline">
-          Voltar ao perfil
-        </NextLink>
-      </div>
+    <div className="flex flex-col gap-6">
+      <h1 className="text-2xl font-bold">Seus links</h1>
       <LinksManager initialLinks={(links ?? []) as Link[]} />
-    </main>
+    </div>
   );
 }

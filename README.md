@@ -91,6 +91,7 @@ youtube-biolink/
 - [PRD](docs/prd.md) — requisitos, epics e stories
 - [Arquitetura](docs/architecture.md) — stack, rotas, schema, decisões técnicas
 - [Frontend Spec](docs/frontend-spec.md) — mapa UX, tokens de design, a11y
+- [Design System](docs/design-system.md) — tokens, primitivos UI, 3 temas, a11y e decisões (Epic 4)
 - [Stories](docs/stories/) — material didático organizado por epic
 
 ---
