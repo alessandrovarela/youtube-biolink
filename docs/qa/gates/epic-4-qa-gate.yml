@@ -95,6 +95,12 @@ concerns:
     status: fixed
     description: "app/layout.tsx mantinha metadata boilerplate 'Create Next App'."
     recommendation: "CORRIGIDO no commit 64ce14c — title/description do app definidos."
+  - severity: high
+    category: regression
+    story: "4.2"
+    status: fixed
+    description: "Achado na validação manual do owner (pós-gate): pnpm dev (Turbopack/Lightning CSS) quebrava TODAS as páginas com 500. O literal `shadow-[var(--shadow-sm/md)]` numa doc de story (4.2.story.md) foi escaneado pelo Tailwind 4 (varre .md) e gerou CSS inválido. build/lint/153 testes NÃO pegaram (build usa pipeline de CSS mais tolerante)."
+    recommendation: "CORRIGIDO no commit 0b85265 (doc reescrita p/ classes válidas) + .next limpo. Adicionar 'pnpm dev sobe sem erro' ao DoD; cuidado com snippets de classe Tailwind em .md."
 
 gates_run:
   typecheck: PASS
