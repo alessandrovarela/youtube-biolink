@@ -28,6 +28,11 @@ export function ProfileForm({ profile }: { profile: ProfileData }) {
   const fieldErrors = state && !state.ok ? (state.fieldErrors ?? {}) : {};
   const formError = state && !state.ok && !state.fieldErrors ? state.error : null;
 
+  // Contador de bio: vira feedback de erro (vermelho + aria-invalid) ao passar
+  // do limite — preserva o comportamento ao vivo do Epic 2 após a migração 4.2.
+  const bioOverLimit = bio.length > MAX_BIO;
+  const bioCounter = `${bio.length}/${MAX_BIO}`;
+
   // Dispara o toast quando um novo resultado de sucesso chega (ajuste de estado
   // durante o render em vez de effect — padrão recomendado pelo React).
   const [prevState, setPrevState] = useState(state);
@@ -63,8 +68,8 @@ export function ProfileForm({ profile }: { profile: ProfileData }) {
         value={bio}
         onChange={(e) => setBio(e.target.value)}
         rows={3}
-        error={fieldErrors.bio}
-        hint={`${bio.length}/${MAX_BIO}`}
+        error={fieldErrors.bio ?? (bioOverLimit ? bioCounter : undefined)}
+        hint={bioOverLimit ? undefined : bioCounter}
       />
 
       <Input
