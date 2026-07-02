@@ -13,6 +13,13 @@ export interface PublicProfile {
   display_name: string | null;
   bio: string | null;
   avatar_url: string | null;
+  /** Tema escolhido pelo dono (Story 4.4). Fallback tratado por resolveTheme(Class). */
+  theme: string | null;
+}
+
+/** Nome de exibição com fallback para `@username` (Story 3.5/4.4). */
+export function displayNameOf(profile: Pick<PublicProfile, 'display_name' | 'username'>): string {
+  return profile.display_name?.trim() || `@${profile.username}`;
 }
 
 /** Link ativo exibido na página pública. Subconjunto de `Link` (lib/types.ts). */
@@ -44,7 +51,7 @@ export async function fetchPublicPage(
 
   const { data: profile, error } = await supabase
     .from('profiles')
-    .select('id, username, display_name, bio, avatar_url')
+    .select('id, username, display_name, bio, avatar_url, theme')
     .eq('username', username)
     .maybeSingle();
 
@@ -63,6 +70,7 @@ export async function fetchPublicPage(
       display_name: profile.display_name,
       bio: profile.bio,
       avatar_url: profile.avatar_url,
+      theme: profile.theme,
     },
     links: (links ?? []) as PublicLink[],
   };

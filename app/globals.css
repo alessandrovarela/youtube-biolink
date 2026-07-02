@@ -32,7 +32,8 @@
   --color-info: #0284c7;
 
   /* ----- Typography ----- */
-  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-sans:
+    var(--font-inter), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   --text-xs: 12px;
@@ -90,7 +91,12 @@
   --topbar-h: 64px;
 }
 
-html.theme-dark {
+/* O tema aplica-se no <html> (dashboard, Story 4.3) OU num container da própria
+   página quando o <html> não conhece o tema do dono (página pública SSR, Story
+   4.4). Ambos os seletores redefinem os tokens no seu escopo — as utilities do
+   Tailwind (`bg-bg`, `text-fg`, …) resolvem via var() no elemento. */
+html.theme-dark,
+.theme-dark {
   --color-bg: #0b1220;
   --color-fg: #e5e7eb;
   --color-muted: #1a2233;
@@ -105,7 +111,8 @@ html.theme-dark {
   --shadow-md: 0 0 0 1px var(--color-border);
 }
 
-html.theme-accent {
+html.theme-accent,
+.theme-accent {
   --color-bg: #edd3a9;
   --color-fg: #1a1410;
   --color-muted: #f0e9dd;
