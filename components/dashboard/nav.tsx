@@ -13,6 +13,7 @@ import { cn } from '@/lib/cn';
 const tabs = [
   { href: '/dashboard', label: 'Perfil' },
   { href: '/dashboard/links', label: 'Links' },
+  { href: '/dashboard/analytics', label: 'Analytics' },
 ] as const;
 
 export function DashboardNav() {
