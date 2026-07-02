@@ -65,6 +65,20 @@ pnpm dev
 Deploy automático: todo merge em `main` publica na URL de produção.
 Todo PR recebe uma preview URL comentada pelo bot da Vercel.
 
+## O MVP está pronto quando…
+
+Checklist de "Definition of Done" do MVP, derivado dos goals do PRD e do NFR17.
+O MVP é declarado entregue quando **todos** os itens abaixo estão marcados:
+
+- [ ] **Todos os FRs do MVP entregues** — os 24 requisitos funcionais (FR1–FR24) dos Epics 1–5 implementados (auth, links, página pública, temas, analytics). *(RLS e rate limiting são deferidos para o Epic 6 e não bloqueiam o MVP — FR21/NFR18.)*
+- [ ] **Pipeline CI verde na `main`** — `typecheck` + `lint` + `test` + `build` passando em todo PR e merge (NFR6).
+- [ ] **Story coverage = 100%** — toda feature MVP tem story em `docs/stories/` antes do merge na `main` (NFR17 / FR24).
+- [ ] **Smoke test manual passando** — roteiro ponta a ponta de [`docs/smoke-test.md`](docs/smoke-test.md) executado com sucesso (signup → perfil/tema → links → página pública → clique → analytics → reset de senha).
+- [ ] **Reprodutibilidade local <15min validada** — **3 devs externos** clonam, configuram `.env.local` e rodam seguindo este README, registrando em issue/discussion no GitHub (FR23 / NFR7 / Story 5.6 AC4). *(item humano — ver `docs/smoke-test.md`)*
+- [ ] **Release `v0.1.0` taggeada na `main`** e Change Log do PRD promovido para `1.0` (Story 5.6 AC5). *(item humano/@devops — ver `docs/smoke-test.md`)*
+
+> A execução do smoke test e os itens marcados como "item humano" são de responsabilidade do **owner** / **@devops** — ver a seção "Itens que dependem de humano / @devops" em [`docs/smoke-test.md`](docs/smoke-test.md).
+
 ## Estrutura do projeto
 
 ```
@@ -92,6 +106,7 @@ youtube-biolink/
 - [Arquitetura](docs/architecture.md) — stack, rotas, schema, decisões técnicas
 - [Frontend Spec](docs/frontend-spec.md) — mapa UX, tokens de design, a11y
 - [Design System](docs/design-system.md) — tokens, primitivos UI, 3 temas, a11y e decisões (Epic 4)
+- [Smoke Test Manual](docs/smoke-test.md) — roteiro de validação ponta a ponta do MVP (Epic 5)
 - [Stories](docs/stories/) — material didático organizado por epic
 
 ---

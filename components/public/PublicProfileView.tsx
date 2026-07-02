@@ -10,6 +10,7 @@
 import { Avatar } from '@/components/ui/Avatar';
 import { cn } from '@/lib/cn';
 import { resolveThemeClass } from '@/lib/theme';
+import { TrackedLink } from '@/components/public/TrackedLink';
 import {
   displayNameOf,
   type PublicLink,
@@ -19,27 +20,6 @@ import {
 export interface PublicProfileViewProps {
   profile: PublicProfile;
   links: PublicLink[];
-}
-
-/** Seta de "link externo" (mesmo glifo do ui_kit public-profile). */
-function LinkArrow() {
-  return (
-    <svg
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      className="shrink-0 text-muted-fg"
-    >
-      <line x1="7" y1="17" x2="17" y2="7" />
-      <polyline points="7 7 17 7 17 17" />
-    </svg>
-  );
 }
 
 export function PublicProfileView({ profile, links }: PublicProfileViewProps) {
@@ -69,18 +49,7 @@ export function PublicProfileView({ profile, links }: PublicProfileViewProps) {
           {links.length === 0 ? (
             <p className="text-sm text-muted-fg">Nenhum link por aqui ainda.</p>
           ) : (
-            links.map((link) => (
-              <a
-                key={link.id}
-                href={link.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center justify-between gap-3 rounded-md border border-border bg-surface px-[18px] py-[14px] font-medium text-fg shadow-[var(--shadow-sm)] transition-[transform,box-shadow,background] duration-150 ease-[var(--ease-out)] hover:-translate-y-px hover:shadow-[var(--shadow-md)] active:scale-[0.99]"
-              >
-                <span className="text-[15px]">{link.title}</span>
-                <LinkArrow />
-              </a>
-            ))
+            links.map((link) => <TrackedLink key={link.id} link={link} />)
           )}
         </nav>
 
