@@ -1,0 +1,114 @@
+epic: EPIC-4
+title: "Design System & Temas — QA Gate"
+gate_agent: "@qa (Quinn)"
+date: "2026-07-01"
+branch: "feature/epic-4-design-system (7 commits sobre main; não pushado)"
+commit: "64ce14c"
+verdict: PASS_WITH_CONCERNS
+
+# ── Resultado por story ─────────────────────────────────────
+stories:
+  - id: "4.1"
+    title: "Design tokens e CSS variables (Tailwind 4)"
+    verdict: PASS
+  - id: "4.2"
+    title: "Primitivos UI + refactor + navegação do dashboard"
+    verdict: PASS
+  - id: "4.3"
+    title: "Seletor de tema persistido + aplicação no dashboard"
+    verdict: PASS
+  - id: "4.4"
+    title: "Tema na página pública (SSR) + a11y WCAG AA"
+    verdict: CONCERNS
+  - id: "4.5"
+    title: "Documentação viva do design system"
+    verdict: PASS
+
+# ── 7 checagens de qualidade (nível epic) ───────────────────
+criteria:
+  - id: 1
+    check: "Code review — padrões, legibilidade, convenção Server Action"
+    result: PASS
+    note: "updateTheme (lib/actions/profile.ts:55) segue 'use server'/getUser()/validação inline isTheme() antes de I/O/.eq('id',uid)/ActionResult, nunca lança. 7 primitivos consistentes; zero any."
+  - id: 2
+    check: "Cobertura de testes"
+    result: PASS
+    note: "153 testes (27 arquivos; era 92 no baseline). Primitivos, resolveThemeClass, updateTheme (mock), contraste WCAG (hex reais), render da pública com tema. Não-tautológicos."
+  - id: 3
+    check: "Acceptance Criteria por story"
+    result: PASS
+    note: "Todas as ACs de 4.1–4.5 atendidas e verificadas contra o código. AC de contraste WCAG da 4.4 atendida com débito documentado (ver concern #1)."
+  - id: 4
+    check: "Sem regressões"
+    result: PASS
+    note: "Refactor 4.2 preservou lógica de auth/CRUD/dnd/authz (diff cosmético). Regressão do contador de bio (concern #4) CORRIGIDA no commit 64ce14c. Auth guard, ISR e client anon público intactos."
+  - id: 5
+    check: "Performance"
+    result: PASS
+    note: "Script anti-flash do ThemeProvider é 1 linha síncrona; troca de tema é classList no <html> (sem re-render de árvore). Nada custoso novo."
+  - id: 6
+    check: "Segurança (OWASP básico)"
+    result: PASS
+    note: "updateTheme valida allowlist antes de persistir. dangerouslySetInnerHTML (theme-provider.tsx:55) só interpola resolveThemeClass (allowlist fechado) via JSON.stringify — sem XSS. Pública sem cookies. authz app-layer por auth.uid()."
+  - id: 7
+    check: "Documentação"
+    result: PASS
+    note: "Stories 4.1–4.5 completas e rastreáveis; docs/design-system.md coerente com o código; link no README; débito de contraste documentado."
+
+architectural_conformance:
+  tailwind4_css_first: true         # tokens via @theme inline; SEM tailwind.config.ts
+  design_system_reference: true     # tokens/primitivos derivam de docs/design/system/project (Artigo IV)
+  no_new_dependencies: true         # package.json inalterado; helper cn local
+  theme_by_root_class: true         # html.theme-*/.theme-* ; dashboard client + pública SSR
+  no_migration: true                # profiles.theme já existia (Story 2.1)
+  app_layer_authz: true             # updateTheme filtra por auth.uid(), sem RLS (Epic 6)
+
+# ── Concerns / débitos ──────────────────────────────────────
+concerns:
+  - severity: medium
+    category: a11y
+    story: "4.4"
+    status: accepted
+    description: "accent-fg (#fff) sobre accent (#d97757) no tema accent = 3.12:1 (< 4.5:1 texto normal). Afeta só o rótulo do Button primary no tema accent, apenas no dashboard; a página pública não usa esse par (verificado em PublicProfileView)."
+    recommendation: "Follow-up de token (Epic 6): escurecer --color-accent do tema accent até ≥4.5:1. Valor vem da referência de design (Artigo IV) → não alterado no epic."
+  - severity: low
+    category: tests
+    story: "4.4"
+    status: accepted
+    description: "a11y-contrast.test.ts afere o par accent-fg/accent com limiar 3.0 (UI-grade); passa mas não barra o débito #1 na CI."
+    recommendation: "Ao corrigir o token, elevar o limiar do par para 4.5 (texto normal do Button primary)."
+  - severity: low
+    category: a11y/ux
+    story: "4.3"
+    status: report_to_design
+    description: "Swatch de preview do tema accent no seletor usa #FAF7F2 (creme) enquanto o canvas accent real é #EDD3A9 (dourado). Preview não representa o tema. Fiel a theme-selector.html (não é invenção do dev)."
+    recommendation: "Design alinha o swatch ao bg real do tema (ou vice-versa)."
+  - severity: low
+    category: regression
+    story: "4.2"
+    status: fixed
+    description: "Contador de bio perdeu o feedback vermelho ao passar de 160 chars após a migração para primitivos."
+    recommendation: "CORRIGIDO no commit 64ce14c — contador vira error (vermelho + aria-invalid) quando bio.length > 160."
+  - severity: low
+    category: docs
+    story: "4.1"
+    status: fixed
+    description: "app/layout.tsx mantinha metadata boilerplate 'Create Next App'."
+    recommendation: "CORRIGIDO no commit 64ce14c — title/description do app definidos."
+
+gates_run:
+  typecheck: PASS
+  lint: PASS
+  test: "PASS (153/153, 27 files)"
+  build: "PASS (13 rotas)"
+
+decision: >-
+  PASS COM CONCERNS — EPIC-4 aprovado para push/PR (@devops). Nenhum issue
+  CRITICAL/HIGH; todas as ACs das 5 stories atendidas e os 4 gates verdes. Dois
+  concerns LOW (regressão do contador de bio e metadata boilerplate) foram
+  CORRIGIDOS no commit 64ce14c. Restam como follow-up consciente: contraste do
+  tema accent no Button primary (medium, débito de token da referência,
+  endereçável no Epic 6), o limiar do teste de contraste correspondente, e o
+  swatch de preview do accent (a reportar ao design). Qualidade de código alta,
+  consistente com a arquitetura (Tailwind 4 CSS-first, zero deps novas, authz
+  app-layer) e com os precedentes dos Epics 1–3.
