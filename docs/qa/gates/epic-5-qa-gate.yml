@@ -1,0 +1,112 @@
+epic: EPIC-5
+title: "Analytics de Cliques — QA Gate"
+gate_agent: "@qa (Quinn)"
+date: "2026-07-02"
+branch: "feature/epic-5-analytics (8 commits sobre main; não pushado)"
+commit: "9dd7935"
+verdict: PASS_WITH_CONCERNS
+
+# ── Resultado por story ─────────────────────────────────────
+stories:
+  - id: "5.1"
+    title: "Schema link_clicks"
+    verdict: PASS
+  - id: "5.2"
+    title: "Server Action de tracking de clique"
+    verdict: PASS
+  - id: "5.3"
+    title: "Tracking na página pública"
+    verdict: PASS
+  - id: "5.4"
+    title: "Agregação de cliques (view + helpers)"
+    verdict: PASS
+  - id: "5.5"
+    title: "Dashboard de analytics"
+    verdict: PASS
+  - id: "5.6"
+    title: "Smoke test manual e critérios de MVP"
+    verdict: PASS
+
+# ── 7 checagens de qualidade (nível epic) ───────────────────
+criteria:
+  - id: 1
+    check: "Code review — padrões, Server Action, migrations"
+    result: PASS
+    note: "trackLinkClick valida UUID inline antes do banco, retorno ActionResult, try/catch nunca lança. Helpers clicks.ts/chart.ts puros, zero any. package.json inalterado (sem deps novas). Migrations ordenadas."
+  - id: 2
+    check: "Cobertura de testes"
+    result: PASS
+    note: "192 passed +1 skipped (benchmark gated). Cobre trackLinkClick (inválido/inativo/UA-trunc/graceful), agregação (totais/7d/30d/isolamento), chart geometry (vazio/ponto único/max-0), TrackedLink (href/target/rel/não-quebra). Sem testes tautológicos."
+  - id: 3
+    check: "Acceptance Criteria por story"
+    result: PASS
+    note: "ACs de 5.1–5.6 verificadas contra o código. Itens humanos da 5.6 (repro externas, tag, PRD→1.0) sinalizados como pendência de owner/@devops."
+  - id: 4
+    check: "Sem regressões"
+    result: PASS
+    note: "Refactor da PublicProfileView (5.3) preservou markup/classes/tokens; ISR (revalidate=60) intacto. Nav ganhou aba Analytics sem quebrar Perfil/Links. typecheck/lint/build verdes."
+  - id: 5
+    check: "Performance"
+    result: PASS
+    note: "View regular + índice (link_id, clicked_at desc); benchmark <10ms DB-side (10k cliques). Tracking fire-and-forget não bloqueia navegação nem opta a pública out de ISR. SVG server-rendered, geometria pré-computada."
+  - id: 6
+    check: "Segurança e privacidade (OWASP + NFR19)"
+    result: PASS
+    note: "Sem IP raw; UA truncado ≤120 no app E via CHECK no banco. Valida link existe+ativo antes do INSERT. SELECT de analytics filtra por profile do auth.uid() (isolamento testado). React escapa dados; sem dangerouslySetInnerHTML. Risco aceito: sem RLS/rate-limit no MVP → Epic 6."
+  - id: 7
+    check: "Documentação"
+    result: PASS
+    note: "Stories completas; smoke-test.md coerente com rotas reais (7 passos + reset e-mail); README 'MVP pronto'; ER.md com link_clicks."
+
+architectural_conformance:
+  no_rls_in_migrations: true        # link_clicks sem RLS (→ Epic 6 / 6.3)
+  no_service_role_mvp: true         # INSERT via createPublicClient (anon), sem SERVICE_ROLE
+  no_rate_limiting_mvp: true        # tracking sem throttle (→ Epic 6 / 6.4)
+  app_layer_authz: true             # SELECT de analytics filtra por profile
+  privacy_no_pii: true              # sem IP raw; UA ≤120 (NFR19)
+  chart_zero_dep: true              # gráfico inline SVG, sem recharts/tremor
+  isr_public_page: true             # revalidate=60 preservado
+  tailwind_docs_excluded: true      # @source not "../docs" (fix def. do bug do Epic 4)
+
+gates_run:
+  typecheck: PASS
+  lint: PASS
+  test: "PASS (192/192 +1 skipped, 35 files)"
+  build: "PASS (14 rotas)"
+  dev_boots: "PASS (/login 200; /dashboard/analytics 307 auth guard)"
+
+# ── Concerns / débitos ──────────────────────────────────────
+concerns:
+  - severity: low
+    category: correctness
+    story: "5.3"
+    status: fixed
+    description: "onAuxClick disparava tracking para qualquer botão não-primário, incluindo o botão direito (menu de contexto), que não navega — inflava a métrica com clique fantasma."
+    recommendation: "CORRIGIDO no commit 9dd7935 — só o middle-click (button===1) é contado."
+  - severity: info
+    category: db
+    story: "5.1"
+    status: accepted
+    description: "link_clicks usa CREATE TABLE/INDEX sem IF NOT EXISTS (não idempotente por si)."
+    recommendation: "Sem ação: o tracking de migrations do Supabase garante execução única; a story não promete idempotência."
+  - severity: info
+    category: viz
+    story: "5.5"
+    status: accepted
+    description: "SVG com preserveAspectRatio='none' distorce a linha ao esticar (cosmético)."
+    recommendation: "Opcional: 'xMidYMid meet' se incomodar."
+  - severity: medium
+    category: security
+    story: "5.1/5.2"
+    status: deferred_epic6
+    description: "Sem RLS/rate-limit no MVP: a anon key permite INSERT direto em link_clicks via PostgREST (spam de cliques)."
+    recommendation: "Deferido conscientemente ao Epic 6 (RLS 6.3 + rate limiting 6.4). Débito do MVP, não bloqueia."
+
+decision: >-
+  PASS COM CONCERNS — EPIC-5 aprovado para push/PR (@devops). Nenhum issue
+  CRITICAL/HIGH; todas as ACs das 6 stories atendidas, 4 gates verdes + dev sobe
+  (lição do Epic 4 agora no DoD). O único concern acionável (over-count do
+  right-click) foi CORRIGIDO no commit 9dd7935. Riscos de INSERT anônimo/rate
+  limiting são débitos do MVP deferidos ao Epic 6. Com o Epic 5, o MVP está
+  FUNCIONALMENTE COMPLETO (6 pilares); a declaração formal de MVP depende do
+  smoke test manual do owner (Story 5.6) + itens de @devops (tag v0.1.0, PRD→1.0).
