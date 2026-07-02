@@ -1,26 +1,175 @@
 @import 'tailwindcss';
 
+/* =========================================================================
+   Biolink Design System — Tokens
+   Fonte de verdade: docs/design/system/project/colors_and_type.css
+   Tokens cascateiam de :root (light por padrão) e são sobrescritos em
+   html.theme-dark / html.theme-accent. Tema é escolha do usuário via
+   classe no <html> — NÃO por prefers-color-scheme.
+   A fonte Inter é self-hosted via next/font (app/layout.tsx) e exposta
+   em --font-inter, referenciada por --font-sans.
+   ========================================================================= */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* ----- Color: light theme (default) ----- */
+  --color-bg: #ffffff;
+  --color-fg: #0f172a;
+  --color-muted: #f1f5f9;
+  --color-muted-fg: #475569;
+  --color-border: #e2e8f0;
+  --color-accent: #2563eb;
+  --color-accent-fg: #ffffff;
+  --color-accent-soft: #dbeafe;
+
+  /* Elevated surface (cards, buttons over canvas).
+     Igual a --color-bg em light/dark; difere em canvases temáticos para contraste. */
+  --color-surface: var(--color-bg);
+
+  /* Status (constantes entre temas) */
+  --color-success: #16a34a;
+  --color-warning: #d97706;
+  --color-danger: #dc2626;
+  --color-info: #0284c7;
+
+  /* ----- Typography ----- */
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --text-xs: 12px;
+  --leading-xs: 16px;
+  --text-sm: 14px;
+  --leading-sm: 20px;
+  --text-base: 16px;
+  --leading-base: 24px;
+  --text-lg: 18px;
+  --leading-lg: 28px;
+  --text-xl: 20px;
+  --leading-xl: 28px;
+  --text-2xl: 24px;
+  --leading-2xl: 32px;
+  --text-3xl: 30px;
+  --leading-3xl: 36px;
+  --text-4xl: 36px;
+  --leading-4xl: 40px;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* ----- Spacing (4px grid) ----- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 64px;
+
+  /* ----- Radii ----- */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-pill: 999px;
+
+  /* ----- Shadows ----- */
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 6px 16px rgba(15, 23, 42, 0.08), 0 2px 4px rgba(15, 23, 42, 0.06);
+
+  /* ----- Motion ----- */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast: 120ms;
+  --duration-base: 150ms;
+  --duration-slow: 220ms;
+
+  /* ----- Layout ----- */
+  --max-public: 480px;
+  --max-dashboard: 720px;
+  --topbar-h: 64px;
 }
 
+html.theme-dark {
+  --color-bg: #0b1220;
+  --color-fg: #e5e7eb;
+  --color-muted: #1a2233;
+  --color-muted-fg: #94a3b8;
+  --color-border: #243046;
+  --color-accent: #60a5fa;
+  --color-accent-fg: #0b1220;
+  --color-accent-soft: #1e3a5f;
+
+  /* Dark theme: sem sombras — bordas carregam a elevação */
+  --shadow-sm: 0 0 0 1px var(--color-border);
+  --shadow-md: 0 0 0 1px var(--color-border);
+}
+
+html.theme-accent {
+  --color-bg: #edd3a9;
+  --color-fg: #1a1410;
+  --color-muted: #f0e9dd;
+  --color-muted-fg: #5c4f42;
+  --color-border: #e5dbc8;
+  --color-accent: #d97757;
+  --color-accent-fg: #ffffff;
+  --color-accent-soft: #f4ddd0;
+  --color-surface: #ffffff;
+}
+
+/* ----- Exposição ao Tailwind 4 (CSS-first, sem tailwind.config.ts) -----
+   `inline` mantém a referência var() nas utilities, preservando a troca de
+   tema em runtime pelas classes no <html>. */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-bg: var(--color-bg);
+  --color-fg: var(--color-fg);
+  --color-muted: var(--color-muted);
+  --color-muted-fg: var(--color-muted-fg);
+  --color-border: var(--color-border);
+  --color-surface: var(--color-surface);
+  --color-accent: var(--color-accent);
+  --color-accent-fg: var(--color-accent-fg);
+  --color-accent-soft: var(--color-accent-soft);
+
+  --color-success: var(--color-success);
+  --color-warning: var(--color-warning);
+  --color-danger: var(--color-danger);
+  --color-info: var(--color-info);
+
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-pill: var(--radius-pill);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
+/* ----- Estilos base ----- */
+html,
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--leading-base);
+  font-feature-settings: 'ss01';
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ----- Focus ring (universal) ----- */
+*:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0ms !important;
+    animation-duration: 0ms !important;
+  }
 }
