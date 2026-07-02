@@ -1,8 +1,8 @@
 # Modelo ER Consolidado — youtube-biolink
 
 > **Owner:** @data-engineer (Dara) · **Pré-requisito:** PRE-1 do EPIC-3 (PRD §7 M3)
-> **Escopo:** entidades do MVP (Epics 1–3). `link_clicks` (Epic 5) e as RLS
-> policies (Epic 6) estão documentadas como *forward-looking* ao final.
+> **Escopo:** entidades do MVP (Epics 1–3) + `link_clicks` (Epic 5, Story 5.1).
+> As RLS policies (Epic 6) seguem documentadas como *forward-looking* ao final.
 
 ## Visão geral
 
@@ -13,8 +13,9 @@ schema **planejado** (`links`, Story 3.1).
 
 ```mermaid
 erDiagram
-    AUTH_USERS ||--|| PROFILES : "1:1 (trigger on signup)"
-    PROFILES  ||--o{ LINKS    : "1:N (on delete cascade)"
+    AUTH_USERS ||--|| PROFILES     : "1:1 (trigger on signup)"
+    PROFILES  ||--o{ LINKS         : "1:N (on delete cascade)"
+    LINKS     ||--o{ LINK_CLICKS   : "1:N (on delete cascade)"
 
     AUTH_USERS {
         uuid id PK "Supabase Auth — gerenciado"
@@ -43,6 +44,14 @@ erDiagram
         timestamptz created_at "default now()"
         timestamptz updated_at "trigger set_updated_at"
     }
+
+    LINK_CLICKS {
+        uuid        id PK "default gen_random_uuid()"
+        uuid        link_id FK "-> links.id, ON DELETE CASCADE, NOT NULL"
+        timestamptz clicked_at "NOT NULL, default now()"
+        text        user_agent_short "nullable, CHECK char_length <= 120 (UA truncado)"
+        text        user_agent_hash "nullable, para dedup futura"
+    }
 ```
 
 ## Relacionamentos
@@ -51,6 +60,7 @@ erDiagram
 |----|------|---------------|-------|
 | `auth.users` | `profiles` | 1:1 | `profiles.id` referencia `auth.users(id)` `ON DELETE CASCADE`. Criado no signup via trigger `on_auth_user_created` → `handle_new_user()` (SECURITY DEFINER). |
 | `profiles` | `links` | 1:N | `links.profile_id` referencia `profiles(id)` `ON DELETE CASCADE`. Deletar o profile remove todos os links. |
+| `links` | `link_clicks` | 1:N | `link_clicks.link_id` referencia `links(id)` `ON DELETE CASCADE`. Deletar o link remove seus cliques. Tabela append-only (analytics). |
 
 ## Fundações compartilhadas (baseline — Story 1.4)
 
@@ -64,6 +74,7 @@ erDiagram
 |--------|--------|-----------|
 | `profiles` | `UNIQUE (username)` | unicidade case-insensitive (via `citext`) + lookup da página pública por username. |
 | `links` | `(profile_id, position)` | ordenação dos links por usuário — leitura do dashboard e da página pública. *(a criar na Story 3.1 AC2.)* |
+| `link_clicks` | `(link_id, clicked_at DESC)` | agregações/leituras de analytics por link, ordenadas por recência. *(Story 5.1 AC2.)* |
 
 ## Regras de autorização no MVP (sem RLS)
 
@@ -79,8 +90,11 @@ erDiagram
 
 | Entidade / mudança | Epic | Nota |
 |--------------------|------|------|
-| `link_clicks` (id, link_id FK, ts, ip_hash, ...) | Epic 5 | analytics de cliques (Story 5.1). N:1 com `links`. |
 | RLS + policies em `profiles` / `links` / `link_clicks` | Epic 6 | stories 6.1/6.2/6.3 — autorização migra do app-layer para o banco. |
+
+> `link_clicks` (Epic 5, Story 5.1) já está entregue e documentada acima como
+> entidade real (schema aplicado). A coleta de cliques (Server Action com UA
+> truncado, sem IP raw) é a Story 5.2.
 
 ---
 *Gerado por @data-engineer como input das stories 3.1 (schema) e 5.1 (analytics).*
