@@ -3,6 +3,7 @@
 import { redirect } from 'next/navigation';
 import { createServerClient } from '@/lib/supabase';
 import { ProfileForm, type ProfileData } from '@/components/dashboard/profile-form';
+import { ThemeSelector } from '@/components/dashboard/theme-selector';
 import { Card } from '@/components/ui/Card';
 
 export default async function DashboardPage() {
@@ -29,6 +30,14 @@ export default async function DashboardPage() {
           <ProfileForm profile={profile as ProfileData} />
         </Card>
       )}
+
+      <Card>
+        <div className="flex flex-col gap-1">
+          <h2 className="text-lg font-semibold">Aparência</h2>
+          <p className="text-sm text-muted-fg">Escolha o tema do seu painel.</p>
+        </div>
+        <ThemeSelector />
+      </Card>
     </div>
   );
 }

@@ -2,7 +2,8 @@
 
 import { revalidatePath } from 'next/cache';
 import { createServerClient } from '@/lib/supabase';
-import type { FormState } from './types';
+import { isTheme } from '@/lib/theme';
+import type { ActionResult, FormState } from './types';
 
 const MAX_BIO = 160;
 
@@ -45,6 +46,32 @@ export async function updateProfile(_prev: FormState, formData: FormData): Promi
     return { ok: false, error: 'Não foi possível salvar o perfil' };
   }
 
+  revalidatePath('/[username]', 'page');
+  return { ok: true };
+}
+
+// Story 4.3 — persiste o tema escolhido (authz app-layer: filtro por auth.uid()).
+// Validação inline (theme ∈ {light,dark,accent}) — mesma convenção § 5.1.
+export async function updateTheme(theme: string): Promise<ActionResult> {
+  if (!isTheme(theme)) return { ok: false, error: 'Tema inválido' };
+
+  const supabase = await createServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: 'Faça login para continuar' };
+
+  const { error } = await supabase
+    .from('profiles')
+    .update({ theme })
+    .eq('id', user.id); // authz: só o próprio perfil
+
+  if (error) {
+    return { ok: false, error: 'Não foi possível salvar o tema' };
+  }
+
+  // A página pública (4.4) e o dashboard leem o tema server-side.
+  revalidatePath('/dashboard');
   revalidatePath('/[username]', 'page');
   return { ok: true };
 }
