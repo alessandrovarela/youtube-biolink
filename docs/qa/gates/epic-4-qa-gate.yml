@@ -99,7 +99,7 @@ concerns:
     category: regression
     story: "4.2"
     status: fixed
-    description: "Achado na validação manual do owner (pós-gate): pnpm dev (Turbopack/Lightning CSS) quebrava TODAS as páginas com 500. O literal `shadow-[var(--shadow-sm/md)]` numa doc de story (4.2.story.md) foi escaneado pelo Tailwind 4 (varre .md) e gerou CSS inválido. build/lint/153 testes NÃO pegaram (build usa pipeline de CSS mais tolerante)."
+    description: "Achado na validação manual do owner (pós-gate): pnpm dev (Turbopack/Lightning CSS) quebrava TODAS as páginas com 500. Um literal de classe Tailwind com barra no arbitrary value (o valor var(--shadow-sm/md)) numa doc de story foi escaneado pelo Tailwind 4 (varre .md) e gerou CSS inválido. build/lint/153 testes NÃO pegaram (build usa pipeline de CSS mais tolerante)."
     recommendation: "CORRIGIDO no commit 0b85265 (doc reescrita p/ classes válidas) + .next limpo. Adicionar 'pnpm dev sobe sem erro' ao DoD; cuidado com snippets de classe Tailwind em .md."
 
 gates_run:

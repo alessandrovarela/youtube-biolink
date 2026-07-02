@@ -1,5 +1,10 @@
 @import 'tailwindcss';
 
+/* Não escanear docs/ como fonte de classes utilitárias: snippets de classe
+   Tailwind em .md/.yml (ex.: exemplos em stories, retrospectivas, gates) não
+   são código de UI e podem gerar CSS inválido (ver retrospectiva Epic 4). */
+@source not "../docs";
+
 /* =========================================================================
    Biolink Design System — Tokens
    Fonte de verdade: docs/design/system/project/colors_and_type.css
