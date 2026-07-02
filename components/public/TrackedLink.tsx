@@ -17,6 +17,7 @@
 //    e Enter por teclado seguem o comportamento nativo do browser. Só disparamos
 //    o tracking em onClick (inclui Enter/left-click) e onAuxClick (middle-click).
 //  - Markup/visual idênticos ao Epic 4 (mesmas classes/tokens da PublicProfileView).
+import type { MouseEvent } from 'react';
 import { trackLinkClick } from '@/lib/actions/track-click';
 import type { PublicLink } from '@/lib/queries/public-page';
 
@@ -58,13 +59,20 @@ export function TrackedLink({ link }: TrackedLinkProps) {
     }
   }
 
+  // onAuxClick cobre botões não-primários; só o middle-click (button 1) navega e
+  // deve contar. O botão direito (button 2) abre o menu de contexto e NÃO navega,
+  // então não é registrado (evita inflar a métrica com clique fantasma).
+  function handleAuxClick(e: MouseEvent<HTMLAnchorElement>) {
+    if (e.button === 1) fireTracking();
+  }
+
   return (
     <a
       href={link.url}
       target="_blank"
       rel="noopener noreferrer"
       onClick={fireTracking}
-      onAuxClick={fireTracking}
+      onAuxClick={handleAuxClick}
       className="flex items-center justify-between gap-3 rounded-md border border-border bg-surface px-[18px] py-[14px] font-medium text-fg shadow-[var(--shadow-sm)] transition-[transform,box-shadow,background] duration-150 ease-[var(--ease-out)] hover:-translate-y-px hover:shadow-[var(--shadow-md)] active:scale-[0.99]"
     >
       <span className="text-[15px]">{link.title}</span>
