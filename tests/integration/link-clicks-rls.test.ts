@@ -167,11 +167,18 @@ suite('Story 6.3 — RLS em public.link_clicks + view link_click_daily (db-layer
 
   // ── AC4 / AC2 — leitura ─────────────────────────────────────────────────
 
-  it('SELECT anônimo em link_clicks não retorna linhas (não há policy TO anon)', async () => {
+  it('SELECT anônimo em link_clicks é NEGADO por PRIVILÉGIO (duas camadas)', async () => {
+    // Story 6.3: a RLS já negava — mas silenciosamente, devolvendo 200 com [], porque
+    // `anon` mantinha o GRANT SELECT herdado do default do Supabase. Era o concern #2
+    // do gate da Wave 2: a ESCRITA tinha duas camadas (RLS + ausência de grant) e a
+    // LEITURA tinha só uma.
+    // Story 6.4 revogou o grant, então agora a barreira externa é o PRIVILÉGIO e o erro
+    // é 42501 — a RLS continua atrás como segunda camada.
     const { data, error } = await anon.from('link_clicks').select('id, link_id');
-    // A policy não gera erro: as linhas simplesmente não existem para esta role.
-    expect(error).toBeNull();
-    expect(data).toHaveLength(0);
+
+    expect(error).not.toBeNull();
+    expect(String(error!.message).toLowerCase()).toContain('permission denied');
+    expect(data).toBeNull();
   });
 
   it('o DONO lê os cliques dos próprios links e NÃO os de terceiros', async () => {

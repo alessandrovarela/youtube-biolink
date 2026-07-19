@@ -10,9 +10,17 @@
 // gracioso de falha (nunca lança). [Source: ADR-001 § 2]
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
+// Story 6.4 acrescentou a camada 2 do rate limiting ANTES da RPC. O helper é mockado
+// aqui (ele tem suíte própria em tests/unit/rate-limit.test.ts) para que estes testes
+// continuem focados no contrato da action — e para poder forçar o estouro.
+//
 // ── Mocks ──────────────────────────────────────────────────────────────
 let mockClient: MockClient;
 let mockUserAgent: string | null;
+/** Resultado de checkRateLimit; false = bucket estourado. */
+let mockRateLimitAllows: boolean;
+/** Cada chamada a checkRateLimit registrada como [bucket, extraKey]. */
+let rateLimitCalls: Array<[string, string | undefined]>;
 
 vi.mock('@/lib/supabase', () => ({
   // Client público é síncrono (stateless anon), diferente de createServerClient.
@@ -22,6 +30,12 @@ vi.mock('next/headers', () => ({
   headers: async () => ({
     get: (name: string) => (name.toLowerCase() === 'user-agent' ? mockUserAgent : null),
   }),
+}));
+vi.mock('@/lib/rate-limit', () => ({
+  checkRateLimit: async (bucket: string, extraKey?: string) => {
+    rateLimitCalls.push([bucket, extraKey]);
+    return mockRateLimitAllows;
+  },
 }));
 
 import { trackLinkClick } from '@/lib/actions/track-click';
@@ -66,6 +80,8 @@ const VALID_ID = 'a0000000-0000-4000-8000-000000000000';
 beforeEach(() => {
   vi.clearAllMocks();
   mockUserAgent = 'Mozilla/5.0 (compatible)';
+  mockRateLimitAllows = true;
+  rateLimitCalls = [];
 });
 
 describe('trackLinkClick', () => {
@@ -136,5 +152,56 @@ describe('trackLinkClick', () => {
     };
     const res = await trackLinkClick(VALID_ID);
     expect(res).toEqual({ ok: false, error: 'Não foi possível registrar o clique.' });
+  });
+});
+
+// ── Story 6.4 — camada 2 do rate limiting (AC11/AC13) ──────────────────
+describe('trackLinkClick — rate limiting (camada 2)', () => {
+  it('consulta o bucket `track` chaveado pelo linkId', async () => {
+    // O NFR18 contratou 60/min por (IP do visitante, linkId): sem o linkId como
+    // extraKey, um visitante clicando em links DIFERENTES compartilharia um bucket só.
+    mockClient = makeClient({ data: true });
+    await trackLinkClick(VALID_ID);
+
+    expect(rateLimitCalls).toEqual([['track', VALID_ID]]);
+  });
+
+  it('o rate limit é avaliado ANTES da RPC (não gasta round-trip quando estoura)', async () => {
+    mockRateLimitAllows = false;
+    mockClient = makeClient({ data: true });
+
+    await trackLinkClick(VALID_ID);
+
+    // Nenhuma RPC disparada: cortou cedo, que é o ponto de um limiter.
+    expect(mockClient.calls).toEqual([]);
+  });
+
+  it('estouro é NO-OP SILENCIOSO: retorna erro tipado e NUNCA lança', async () => {
+    // Contrato fire-and-forget das Stories 5.2/5.3 preservado — a navegação do
+    // visitante não pode ser bloqueada por um clique não contabilizado.
+    mockRateLimitAllows = false;
+    mockClient = makeClient({ data: true });
+
+    const res = await trackLinkClick(VALID_ID);
+
+    expect(res.ok).toBe(false);
+    // Erro genérico: nada que a UI possa renderizar revelando o mecanismo.
+    expect(res).toEqual({ ok: false, error: 'Não foi possível registrar o clique.' });
+  });
+
+  it('estouro não impede o clique SEGUINTE quando o limite libera', async () => {
+    mockRateLimitAllows = false;
+    mockClient = makeClient({ data: true });
+    expect((await trackLinkClick(VALID_ID)).ok).toBe(false);
+
+    mockRateLimitAllows = true;
+    mockClient = makeClient({ data: true });
+    expect((await trackLinkClick(VALID_ID)).ok).toBe(true);
+  });
+
+  it('linkId inválido nem chega ao rate limiter (validação primeiro)', async () => {
+    mockClient = makeClient({});
+    await trackLinkClick('not-a-uuid');
+    expect(rateLimitCalls).toEqual([]);
   });
 });

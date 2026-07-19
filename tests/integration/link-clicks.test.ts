@@ -175,12 +175,16 @@ suite('Story 5.1 — schema link_clicks + isolamento (RLS, Story 6.3)', () => {
     expect(rowsB!.every((r) => r.link_id === linkB)).toBe(true);
     expect(rowsB!).toHaveLength(1);
 
-    // E o anônimo não vê nenhum dos dois (não há policy TO anon).
+    // E o anônimo não vê nenhum dos dois. Desde a Story 6.4 a recusa vem do
+    // PRIVILÉGIO (revoke select ... from anon, concern #2 do gate da Wave 2) e não
+    // mais da RLS silenciosa — antes o retorno era 200 com []. A RLS segue atrás
+    // como segunda camada.
     const { data: rowsAnon, error: anonErr } = await anon!
       .from('link_clicks')
       .select('id, link_id')
       .in('link_id', [linkA, linkB]);
-    expect(anonErr).toBeNull();
-    expect(rowsAnon).toHaveLength(0);
+    expect(anonErr).not.toBeNull();
+    expect(String(anonErr!.message).toLowerCase()).toContain('permission denied');
+    expect(rowsAnon).toBeNull();
   });
 });
