@@ -1,0 +1,385 @@
+epic: EPIC-6
+wave: 4
+title: "Story 6.6 — Contraste e fidelidade do tema accent — Design Gate"
+gate_agent: "@ux-design-expert (Uma)"
+gate_type: design
+date: "2026-07-19"
+branch: "feature/epic-6-security"
+commit: "722e0d1"
+verdict: CONCERNS
+
+# ── Escopo deste gate ───────────────────────────────────────
+# Este é o gate de DESIGN da Story 6.6, complementar ao gate de QA da Wave 4
+# (docs/qa/gates/epic-6-wave-4-gate.yml, @qa). Julga a decisão ESTÉTICA que o
+# @dev explicitamente deixou em aberto — a a11y ele provou, a identidade não.
+
+stories:
+  - id: "6.6"
+    title: "Débitos de a11y/design do Epic 4 (contraste e swatch do tema accent)"
+    verdict: CONCERNS
+    acs_met: "6/8 — AC7 (visual) NÃO executável; AC8 (stretch) declinado"
+    note: >-
+      O objetivo de acessibilidade foi ATINGIDO e está bem provado: o par
+      accent-fg/accent sai de 3.12:1 para 4.56:1, a CI passa a barrar regressão, e
+      três pares (focus ring, borda de input, contorno do botão) saem de reprovado
+      para aprovado em WCAG 1.4.11 — um ganho real não previsto pela story. O
+      veredito é CONCERNS por três achados deste gate: (a) o hex escolhido é
+      DOMINADO por uma alternativa em todos os eixos (issue #1); (b) a propagação
+      da referência de design ficou incompleta e deixou o componente divergindo do
+      arquivo que ele próprio declara como fonte de verdade (issues #2 e #3);
+      (c) o AC8 foi declinado com o diagnóstico errado (issue #5).
+
+# ══════════════════════════════════════════════════════════════
+# ITEM 1 — A PERGUNTA CENTRAL: #b06046 preserva a identidade?
+# ══════════════════════════════════════════════════════════════
+# Resposta curta: a cor é ACEITÁVEL (não descaracteriza a marca), mas NÃO é a
+# melhor escolha disponível. Existe um hex que atinge MAIS contraste E preserva
+# MELHOR a identidade. A escolha atual paga um preço de croma que não precisava
+# ser pago.
+
+color_analysis:
+  method: >-
+    Razão de contraste pela fórmula W3C (a mesma do teste). Identidade avaliada em
+    OKLCH, não em HSL — a "saturação" HSL não é uma métrica perceptual e é o que
+    induziu o @dev ao erro (ver root_cause abaixo).
+
+  candidates:
+    - hex: "#d97757"
+      role: "original (Epic 4)"
+      contrast_white: 3.122
+      contrast_bg_edd3a9: 2.154
+      oklch: { L: 67.2, C: 0.1308, H: 38.8 }
+      note: "Reprova 1.4.3 (texto) E 1.4.11 (focus ring sobre o canvas). Baseline de identidade."
+
+    - hex: "#b06046"
+      role: "escolhido pelo @dev"
+      contrast_white: 4.558
+      contrast_bg_edd3a9: 3.145
+      oklch: { L: 57.6, C: 0.1110, H: 38.7 }
+      chroma_delta: "-15% vs original"
+      note: >-
+        Matiz perceptual preservado (38.7 vs 38.8 — excelente). Mas o croma cai 15%:
+        é o que produz a leitura "mais terroso, menos vibrante" que o próprio @dev
+        registrou honestamente. Legível e coerente, porém empobrecido.
+
+    - hex: "#c6522d"
+      role: "alternativa avaliada e descartada pelo @dev"
+      contrast_white: 4.520
+      contrast_bg_edd3a9: 3.119
+      oklch: { L: 58.4, C: 0.1570, H: 37.8 }
+      chroma_delta: "+20% vs original"
+      note: >-
+        O @dev descreveu-a como 'preserva melhor a saturação'. NÃO preserva — ela
+        ULTRAPASSA o original em 20% de croma e desloca o matiz 1.0°. Trocaria um
+        desvio de identidade por outro, na direção oposta (mais vermelhão/ígneo,
+        menos argila). Descartá-la foi correto, mas pela razão errada.
+
+    - hex: "#b35536"
+      role: "RECOMENDADO POR ESTE GATE"
+      contrast_white: 4.919
+      contrast_bg_edd3a9: 3.394
+      oklch: { L: 56.0, C: 0.1306, H: 38.7 }
+      chroma_delta: "-0.2% vs original (praticamente idêntico)"
+      note: >-
+        Domina #b06046 em TODOS os eixos simultaneamente: +0.36 de contraste sobre
+        branco (4.92 vs 4.56), +0.25 sobre o canvas (3.39 vs 3.15), e croma
+        perceptualmente indistinguível do original (0.1306 vs 0.1308, desvio 0.2%)
+        com matiz a 0.09° do original. Não existe trade-off aqui — é ganho puro
+        nas duas dimensões que estavam em conflito.
+
+  root_cause_of_the_chroma_loss: >-
+    O @dev escureceu por ESCALA RGB UNIFORME (multiplicar os 3 canais por k=0.81).
+    Essa operação preserva o matiz HSL (por isso o 14.8° → 14.7° que ele reportou
+    parecia tranquilizador), mas encolhe proporcionalmente a distância entre os
+    canais — ou seja, DESSATURA por construção. A operação correta para escurecer
+    preservando identidade é reduzir L em OKLCH mantendo C e H constantes. Foi
+    isso que este gate fez, e o resultado (#b35536) tem mais contraste E mais croma
+    que a escolha atual. O "trade-off a11y vs identidade" que a story assumiu como
+    inevitável (risco R1) era, na verdade, um artefato do método de escurecimento.
+
+  argument_rejected:
+    claim: "#b06046 tem mais folga que #c6522d (4.56 vs 4.52), logo é mais seguro."
+    assessment: >-
+      Argumento sem lastro. O token é um hex ESTÁTICO conferido por um teste
+      determinístico — não há drift, ruído nem variação de runtime que a "folga"
+      pudesse absorver. 4.56 e 4.52 são igualmente 'na linha'; 0.04 de diferença
+      não compra segurança nenhuma. Se folga fosse de fato o critério, ela deveria
+      ter levado a #b35536 (4.92), que o @dev nunca avaliou porque a busca dele foi
+      unidimensional (uma única escala a partir do original) em vez de uma varredura
+      no espaço de cor.
+
+  verdict_on_color: >-
+    APROVADA COM RESSALVA — #b06046 não é um erro e não bloqueia: é uma terracota
+    legítima, de matiz correto, e cumpre o objetivo de a11y. Mas RECOMENDO
+    SUBSTITUIR por #b35536. É mudança de um único token, sem risco, que recupera
+    integralmente o croma da marca e ainda aumenta a margem de contraste. Como a
+    AC1 delega explicitamente a escolha final estética a este gate, exerço essa
+    prerrogativa: a marca "quente" não precisa ser paga em troca de a11y.
+
+  alternatives_considered_and_rejected:
+    - option: "Manter o accent original e escurecer só onde ele é fundo de texto"
+      rejected_because: >-
+        Não resolve. O #d97757 também REPROVA 1.4.11 como focus ring e borda de
+        input sobre o canvas #edd3a9 (2.15:1 < 3:1) — ou seja, o problema não está
+        só onde ele é fundo de texto. Manter o original preservaria um segundo
+        defeito de a11y que o escurecimento fecha de graça.
+    - option: "Token separado só para o Button primary"
+      rejected_because: >-
+        Viola o Artigo IV (sem invenção de tokens) e o escopo OUT explícito da
+        story. Além disso resolveria só o Button e deixaria focus ring/bordas
+        reprovando. Seria mais superfície de manutenção para menos a11y.
+    - option: "Máxima saturação possível a 4.5:1 (ex.: #e03101, #db3700)"
+      rejected_because: >-
+        Atinge o limiar mas rompe a identidade do sistema. A README do design
+        system define o produto como 'low in chroma', com o accent usado
+        'sparingly'. Um vermelho-vermilhão de croma 0.21 seria estranho ao sistema
+        e brigaria com o canvas âmbar.
+
+# ══════════════════════════════════════════════════════════════
+# ITEM 2 — DEMAIS VERIFICAÇÕES
+# ══════════════════════════════════════════════════════════════
+checks:
+  - id: 1
+    check: "O limiar 4.5 é o correto para o par accent-fg/accent?"
+    result: PASS
+    evidence: >-
+      CONFIRMADO lendo o componente. components/ui/Button.tsx:18 aplica
+      'bg-accent text-accent-fg' na variant primary; o texto é font-medium (peso
+      500, linha 69) nos tamanhos sm=13px, md=14px (text-sm), lg=15px (linha
+      24-28). WCAG 2.1 define texto grande como >=18.66px E bold, ou >=24px.
+      13-15px em peso 500 é TEXTO NORMAL sem ambiguidade — rege 1.4.3 AA = 4.5:1.
+      O limiar antigo (3.0, "UI/large") estava objetivamente errado para este par.
+      Elevar para 4.5 é a correção certa, e o teste passa nos 3 temas.
+      Observação: o CheckMark de theme-selector.tsx:67 usa o mesmo par, mas é um
+      ícone aria-hidden — rege-se por 1.4.11 (3:1). O Button é quem obriga 4.5.
+
+  - id: 2
+    check: "Os swatches representam fielmente os 3 temas? (valor a valor)"
+    result: PASS
+    evidence: >-
+      Conferido token a token contra app/globals.css. light: #FFFFFF/#0F172A/
+      #E2E8F0 + strip [#FFFFFF,#F1F5F9,#2563EB] == :root (bg/fg/border/muted/
+      accent). dark: #0B1220/#E5E7EB/#243046 + strip [#0B1220,#1A2233,#60A5FA] ==
+      html.theme-dark. accent: #EDD3A9/#1A1410/#E5DBC8 + strip [#EDD3A9,#F0E9DD,
+      #B06046] == html.theme-accent. Os três batem. O R4 (strip[2] com o hex
+      antigo) está fechado. Se o accent for trocado por #b35536 (issue #1), o
+      strip[2] e o comentário do componente acompanham.
+    minor_observation: >-
+      Nenhum swatch representa --color-surface: #FFFFFF, que é justamente o que
+      distingue o tema accent (cards brancos sobre canvas âmbar). O preview é
+      fiel ao canvas, mas não comunica a característica mais própria do tema.
+      Melhoria opcional, fora do escopo da 6.6 — não é defeito.
+
+  - id: 3
+    check: "A propagação do novo accent para docs/design/ está consistente? Sobrou órfão?"
+    result: CONCERNS
+    evidence: >-
+      A propagação do ACCENT está correta nos 8 arquivos de docs/design/ — varredura
+      completa por #d97757/#D97757 não encontra resíduo ali. As tabelas de
+      docs/design-system.md (§3/§4/§5.1) e a nota de 4.4.story.md também estão
+      corretas. PORÉM sobrou UM órfão real: docs/frontend-spec.md:82 ainda declara
+      o accent do tema como '#D97757 (amber-clay)' numa tabela de paleta. Esse
+      arquivo NÃO estava no File List. O @dev justificou não mexer em
+      frontend-spec.md alegando que o escopo cobria o accent e não o bg — mas essa
+      linha carrega o accent ERRADO também, o que a coloca dentro da AC6 e não
+      fora dela. Ver issue #2.
+    logo_html_decision: >-
+      CONCORDO com a decisão de preservar #D97757 em preview/logo.html:45. Ali o
+      hex é o preenchimento do <rect> do LOGOTIPO — ativo de marca, não token de
+      UI. Não há requisito de contraste de texto sobre ele, e a README define a
+      marca como tipográfica e estável. Escurecer o logo junto com um token de
+      botão seria confundir identidade com acessibilidade. Decisão correta e bem
+      fundamentada.
+
+  - id: 4
+    check: "Débito surface-vs-canvas (#FAF7F2 vs #EDD3A9): corrigir agora ou virar débito?"
+    result: CONCERNS
+    assessment: CORRIGIR AGORA — o @dev subdimensionou este achado.
+    evidence: >-
+      O @dev registrou 2 ocorrências (frontend-spec.md:82 e
+      docs/design/system/project/README.md:123). A varredura deste gate encontra
+      SETE arquivos de referência ainda descrevendo o canvas accent como o creme
+      #FAF7F2. Ver issue #3 para a lista e o agravante.
+
+  - id: 5
+    check: "AC8 (stretch) — preserveAspectRatio não aplicado. Concorda?"
+    result: CONCERNS
+    assessment: >-
+      CONCORDO com a AÇÃO (não aplicar 'meet' às cegas), DISCORDO do DIAGNÓSTICO
+      ('cosmético'). Ver issue #5 — há um defeito real de legibilidade em mobile,
+      e o fix correto não é o que a recomendação original sugeria.
+
+  - id: 6
+    check: "Validação visual (AC7)"
+    result: NOT_EXECUTABLE
+    evidence: >-
+      DECLARAÇÃO EXPLÍCITA: este gate NÃO viu os temas renderizados. Chequei a
+      disponibilidade de browser (list_connected_browsers) e o retorno foi vazio —
+      nenhuma instância Chrome conectada. Não há screenshot, não há render, não há
+      inspeção visual. Toda a análise cromática acima é ANALÍTICA (fórmula W3C +
+      conversão OKLCH), não observacional. Não afirmo ter visto o que não vi. A
+      AC7 permanece ABERTA e transfere-se para o owner humano. Ver issue #4.
+
+# ── Issues ──────────────────────────────────────────────────
+issues:
+  - id: 1
+    severity: medium
+    category: design/identity
+    status: open
+    description: >-
+      --color-accent: #b06046 perde 15% do croma perceptual da marca (OKLCH C
+      0.1308 → 0.1110) por efeito colateral do método de escurecimento (escala RGB
+      uniforme dessatura por construção). O sacrifício de identidade é evitável.
+    recommendation: >-
+      Substituir por #b35536 em app/globals.css, components/dashboard/
+      theme-selector.tsx (strip[2].bg → #B35536), docs/design/system/project/
+      colors_and_type.css + as demais 7 referências, e as tabelas de
+      docs/design-system.md. Contraste sobre #fff: 4.92:1 (era 4.56). Sobre o
+      canvas #edd3a9: 3.39:1 (era 3.15). Croma OKLCH 0.1306 vs 0.1308 do original.
+      Atualizar o comentário do token: o método passa a ser 'redução de L em OKLCH
+      com C e H constantes', não 'escala RGB uniforme'.
+    blocking: false
+
+  - id: 2
+    severity: medium
+    category: docs/consistency
+    status: open
+    description: >-
+      docs/frontend-spec.md:82 ainda declara o accent do tema como '#D97757
+      (amber-clay)' — único órfão do hex antigo fora de contexto histórico. É a
+      tabela de paleta do frontend spec, portanto referência ativa, e o accent é
+      literalmente o objeto da AC6.
+    recommendation: >-
+      Corrigir a linha inteira: accent → o hex final (#B35536 se a issue #1 for
+      aceita, senão #B06046) E bg → #EDD3A9 (issue #3), numa só edição.
+    blocking: false
+
+  - id: 3
+    severity: medium
+    category: docs/consistency
+    status: open
+    description: >-
+      A confusão surface-vs-canvas que ORIGINOU o bug do swatch continua viva em 7
+      arquivos de referência, que descrevem o canvas do tema accent como #FAF7F2
+      quando globals.css e colors_and_type.css dizem #EDD3A9:
+      docs/frontend-spec.md:82; docs/design/system/project/README.md:123;
+      preview/theme-selector.html:14,36; preview/color-themes.html:12,39;
+      preview/logo.html:12; ui_kits/dashboard/index.html:84,92;
+      docs/design/prototypes/project/screens/dashboard.jsx:42.
+      AGRAVANTES que elevam isto acima de 'fora de escopo':
+      (a) o @dev EDITOU 5 desses arquivos nesta story, trocando o accent na MESMA
+      LINHA em que o #FAF7F2 errado permaneceu (ex.: theme-selector.html:36);
+      (b) theme-selector.tsx:3 declara preview/theme-selector.html como 'fonte de
+      verdade' — o componente agora DIVERGE do arquivo que ele cita como fonte,
+      que é uma inconsistência nova, criada por esta story;
+      (c) docs/design/system/project/README.md é o corpo da skill biolink-design
+      (symlink de .claude/skills/biolink-design) — é o que todo agente carrega ao
+      desenhar, e ele se CONTRADIZ internamente: a seção '3 Themes' diz 'warm
+      amber background (#EDD3A9)' e a seção 'Visual Foundations' diz '#FAF7F2
+      warm-cream bg'. Deixar isso de pé faz o próximo agente reintroduzir o bug.
+    recommendation: >-
+      CORRIGIR AGORA, não virar débito. É substituição literal de #FAF7F2 por
+      #EDD3A9 em 7 arquivos (nenhum é código de produção), fecha o concern #3 do
+      gate do Epic 4 na raiz e elimina a fonte de reincidência. Manter #FAF7F2
+      apenas onde ele designe genuinamente uma SURFACE/card, se houver — conferir
+      caso a caso; o token de surface do tema accent é #FFFFFF, então provavelmente
+      nenhum uso legítimo resta.
+    blocking: false
+
+  - id: 4
+    severity: medium
+    category: process/a11y
+    status: open
+    description: >-
+      A AC7 (verificação visual nos 3 temas, dashboard + página pública) NÃO foi
+      executada por ninguém: nem pelo @dev (extensão Chrome desconectada, sem
+      sessão autenticada) nem por este gate (nenhum browser conectado, verificado).
+      A validação de contraste é analítica e sólida, mas contraste não é a única
+      dimensão visual — harmonia do accent contra o canvas âmbar, peso do focus
+      ring e leitura dos cards brancos sobre #EDD3A9 só se julgam vendo.
+    recommendation: >-
+      NÃO fechar a Story 6.6 como Done sem uma passada visual do owner humano:
+      pnpm dev, alternar os 3 temas no dashboard e abrir /[username] em cada um.
+      Checklist mínimo: (a) rótulo do Button primary legível no tema accent;
+      (b) focus ring visível ao tabular sobre o canvas âmbar; (c) swatch do
+      seletor visualmente igual à página que ele aplica; (d) gráfico de analytics.
+      Se a issue #1 for aceita, validar já com #b35536.
+    blocking: false
+
+  - id: 5
+    severity: low
+    category: design/rendering
+    status: open
+    description: >-
+      AC8 declinado com diagnóstico incorreto. O @dev tratou preserveAspectRatio=
+      "none" como 'cosmético'. Não é: o viewBox é 720x240 (aspecto 3.0) renderizado
+      em 'h-56 w-full' (224px de altura). Em desktop a 720px o aspecto renderizado
+      é 3.21 — distorção horizontal leve (~7%). Em mobile a ~360px o aspecto
+      renderizado é 1.61, ou seja o SVG é COMPRIMIDO a ~54% na horizontal: os
+      rótulos dos eixos (<text fontSize=11>) renderizam anamorficamente condensados
+      e as hairlines de grid ficam com espessura não-uniforme. Num produto
+      declaradamente mobile-first, isso é defeito de legibilidade, não capricho.
+      A ressalva do @dev sobre 'meet' está CORRETA — 'xMidYMid meet' resolveria a
+      distorção mas abriria letterboxing severo em mobile (o gráfico ocuparia ~120
+      dos 224px). Ou seja: a recomendação literal do gate do Epic 5 era um mau fix,
+      e recusá-la foi acerto. Só o rótulo 'cosmético' está errado.
+    recommendation: >-
+      Não é bloqueio e continua fora do DoD da 6.6. Reabrir como débito de design
+      com o fix CORRETO, que não é nenhuma das duas opções discutidas: trocar
+      'className="h-56 w-full"' por 'className="w-full h-auto"' e remover
+      preserveAspectRatio="none" em clicks-chart.tsx:34. O SVG passa a escalar
+      uniformemente no aspecto natural 3:1 em qualquer largura — sem distorção e
+      sem letterboxing, porque a altura acompanha a largura. Requer conferência
+      visual do card (a altura deixa de ser fixa em 224px).
+    blocking: false
+
+# ── O que este gate confirma como BEM FEITO ─────────────────
+strengths:
+  - "Diagnóstico 1.4.3 vs 1.4.11 correto e bem argumentado — o par É texto normal, verificado no Button."
+  - >-
+    Levantamento exaustivo dos consumidores do token (grep + cálculo par a par)
+    antes de mexer: prova que nenhum consumidor regride e descobre um ganho não
+    previsto (3 pares saem de reprovado para aprovado em 1.4.11). Rigor acima do
+    pedido pela story.
+  - >-
+    Honestidade metodológica exemplar: o @dev declarou que NÃO validou a estética e
+    NÃO executou a AC7, em vez de assinar embaixo. Registrou o débito de
+    frontend-spec/README que descobriu fora de escopo em vez de silenciá-lo. É
+    exatamente o comportamento que torna um gate possível.
+  - "Decisão de não escurecer o logotipo (logo.html) — separa identidade de a11y corretamente."
+  - "Decisão de não mexer em --color-accent-soft: verificou que não tem consumidor; evitou invenção (Artigo IV)."
+  - "Elevar o limiar do teste fecha o débito na CI — a regressão passa a ser impossível, não só improvável."
+
+# ── Conformidade ────────────────────────────────────────────
+conformance:
+  article_iv_no_invention: true      # nenhum token novo; accent propagado, não inventado
+  design_reference_synced: partial   # accent OK; canvas do tema accent ainda divergente (issue #3)
+  wcag_1_4_3_normal_text: true       # 4.56:1 >= 4.5 (4.92:1 se a issue #1 for aceita)
+  wcag_1_4_11_ui_components: true    # focus ring/bordas passam a 3.15:1 (3.39:1 com #b35536)
+  ci_regression_barrier: true        # limiar 4.5 nos 3 temas
+  no_new_tokens: true
+  visual_validation: false           # NÃO executada — sem browser (issue #4)
+
+gates_run:
+  typecheck: "PASS (reportado pelo @dev)"
+  lint: "PASS (reportado pelo @dev)"
+  test: "PASS (233 passed | 1 skipped, reportado pelo @dev)"
+  visual: "NOT RUN — nenhum browser conectado, verificado por este gate"
+
+decision: >-
+  CONCERNS — a Story 6.6 atinge seu objetivo e NÃO deve voltar para o início: a
+  a11y está corrigida, provada e blindada na CI, os swatches estão fiéis, e o
+  trabalho do @dev é metodologicamente sólido e honesto sobre os próprios limites.
+  Respondendo à pergunta central: a correção de a11y NÃO custou a identidade
+  visual de forma irreparável — #b06046 é uma terracota legítima de matiz correto
+  — mas custou 15% de croma que NÃO precisava ser pago. O trade-off assumido pela
+  story (risco R1) era falso: era artefato do método de escurecimento, não uma lei
+  do espaço de cor. Recomendo #b35536, que tem mais contraste (4.92:1) E mais
+  fidelidade de marca (croma a 0.2% do original) que a escolha atual — domina em
+  todos os eixos, sem trade-off. Antes de Done, peço: (1) trocar o token por
+  #b35536 ou justificar a manutenção do atual; (2) fechar a issue #3 (canvas
+  #FAF7F2 em 7 referências) — é barato, e é a fonte de reincidência do bug que
+  esta story veio corrigir; (3) o órfão de frontend-spec.md:82; (4) UMA passada
+  visual humana, que nem o @dev nem este gate conseguiram fazer. Nenhum item é
+  bloqueante isoladamente, mas o item (4) é condição para declarar a AC7 cumprida
+  — e nenhum agente pode assiná-la por procuração.
