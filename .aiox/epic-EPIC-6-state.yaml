@@ -24,9 +24,9 @@ epic_state:
         "6.2": { status: completed, executor: "@dev", quality_gate: "@data-engineer" }
     2:
       name: "Tracking Hardening"
-      status: pending
+      status: completed
       stories:
-        "6.3": { status: pending, executor: "@dev", quality_gate: "@qa" }
+        "6.3": { status: completed, executor: "@dev", quality_gate: "@qa" }
     3:
       name: "Rate Limiting"
       status: pending
@@ -41,3 +41,33 @@ epic_state:
 
   gate_verdicts:
     1: { status: approved, agent: "@data-engineer", artifact: "docs/qa/gates/epic-6-wave-1-gate.yml", concerns: 6, blocking: 0 }
+    2: { status: concerns, agent: "@qa", artifact: "docs/qa/gates/epic-6-wave-2-gate.yml", concerns: 6, blocking: 0 }
+
+  decisions:
+    - id: "DEC-1"
+      raised_by: "@qa (gate wave 2, issue #1)"
+      resolved_by: "@architect (emenda 1 do ADR) + @pm (escolha final)"
+      status: resolved
+      problem: >-
+        Rate limiting na Server Action nao fecha click inflation: a RPC
+        record_link_click e grant execute to anon e chamavel direto no
+        PostgREST (provado: 20 curl = 20 cliques forjados). Chave do bucket
+        e hash(ip+linkId) e a RPC nao enxerga o IP do visitante confiavel.
+      resolution: >-
+        Teto movido para DENTRO da RPC, chaveado por link_id (unica identidade
+        autoritativa que o chamador nao escolhe). Camada 1 = teto 60/min/link
+        na RPC (alcanca o curl direto); camada 2 = 60/min/hash(ip+linkId) na
+        Server Action (NFR18 verbatim). @pm DESCARTOU a camada 3 (app-proof
+        com segredo server-only): resultado de seguranca identico (atacante
+        grava 60/min/link nas duas opcoes), comprava apenas folga para link
+        viral (600/min) ao custo de segredo semeado a mao fora do
+        versionamento em 2 ambientes + env novo + modo de falha adicional.
+        Simplicidade didatica prevalece. Sem TRACKING_APP_PROOF.
+      accepted_debt: >-
+        Link legitimamente viral acima de 60 cliques/min por link subnotifica
+        (analytics vira piso, nao total). Atacante direto ainda grava ate
+        60/min/link — rate limiting limita volume, nunca autenticidade.
+      critical_impl_note: >-
+        `drop function if exists public.record_link_click(uuid, text)` e
+        OBRIGATORIO: sem isso a assinatura antiga permanece publicada com
+        grant execute to anon e SEM TETO — o vetor ficaria aberto.
