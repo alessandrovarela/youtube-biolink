@@ -7,21 +7,21 @@ epic_state:
   status: active
   branch: feature/epic-6-security
 
-  current_wave: 1
+  current_wave: 2
   total_waves: 4
 
   prerequisites:
-    PRE-1: { status: in_progress, owner: "@architect" }
-    PRE-2: { status: pending, owner: "@dev" }
-    PRE-3: { status: pending, owner: "@devops", conditional: true }
+    PRE-1: { status: completed, owner: "@architect", artifact: "docs/architecture/security-epic-6.md" }
+    PRE-2: { status: completed, owner: "@data-engineer", artifact: "docs/architecture/epic-6-data-access-inventory.md" }
+    PRE-3: { status: cancelled, reason: "admin client refutado pelo ADR; sem SERVICE_ROLE. Substituido por RATE_LIMIT_PEPPER na 6.4" }
 
   waves:
     1:
       name: "RLS Foundation"
-      status: pending
+      status: completed
       stories:
-        "6.1": { status: pending, executor: "@dev", quality_gate: "@data-engineer" }
-        "6.2": { status: pending, executor: "@dev", quality_gate: "@data-engineer" }
+        "6.1": { status: completed, executor: "@dev", quality_gate: "@data-engineer" }
+        "6.2": { status: completed, executor: "@dev", quality_gate: "@data-engineer" }
     2:
       name: "Tracking Hardening"
       status: pending
@@ -39,4 +39,5 @@ epic_state:
         "6.5": { status: pending, executor: "@dev", quality_gate: "@qa" }
         "6.6": { status: pending, executor: "@dev", quality_gate: "@ux-design-expert" }
 
-  gate_verdicts: {}
+  gate_verdicts:
+    1: { status: approved, agent: "@data-engineer", artifact: "docs/qa/gates/epic-6-wave-1-gate.yml", concerns: 6, blocking: 0 }
