@@ -4,10 +4,10 @@ epic_state:
   mode: yolo
   started_at: "2026-07-19"
   updated_at: "2026-07-19"
-  status: active
+  status: completed_pending_merge
   branch: feature/epic-6-security
 
-  current_wave: 2
+  current_wave: 4
   total_waves: 4
 
   prerequisites:
@@ -29,45 +29,80 @@ epic_state:
         "6.3": { status: completed, executor: "@dev", quality_gate: "@qa" }
     3:
       name: "Rate Limiting"
-      status: pending
+      status: completed
       stories:
-        "6.4": { status: pending, executor: "@dev", quality_gate: "@qa" }
+        "6.4": { status: completed, executor: "@dev", quality_gate: "@qa", note: "issue HIGH do gate corrigido em migration de hardening" }
     4:
       name: "Edge & Polimento"
-      status: pending
+      status: completed
       stories:
-        "6.5": { status: pending, executor: "@dev", quality_gate: "@qa" }
-        "6.6": { status: pending, executor: "@dev", quality_gate: "@ux-design-expert" }
+        "6.5": { status: completed, executor: "@dev", quality_gate: "@qa" }
+        "6.6": { status: completed, executor: "@dev", quality_gate: "@ux-design-expert", note: "AC7 (validacao visual) pendente de humano" }
 
   gate_verdicts:
-    1: { status: approved, agent: "@data-engineer", artifact: "docs/qa/gates/epic-6-wave-1-gate.yml", concerns: 6, blocking: 0 }
-    2: { status: concerns, agent: "@qa", artifact: "docs/qa/gates/epic-6-wave-2-gate.yml", concerns: 6, blocking: 0 }
+    1: { status: approved, agent: "@data-engineer", artifact: "docs/qa/gates/epic-6-wave-1-gate.yml", blocking: 0 }
+    2: { status: concerns, agent: "@qa", artifact: "docs/qa/gates/epic-6-wave-2-gate.yml", blocking: 0 }
+    3: { status: concerns, agent: "@qa", artifact: "docs/qa/gates/epic-6-wave-3-gate.yml", blocking: 0, note: "1 HIGH levantado e corrigido" }
+    4: { status: concerns, agent: "@qa", artifact: "docs/qa/gates/epic-6-wave-4-gate.yml", blocking: 0 }
+    4-design: { status: concerns, agent: "@ux-design-expert", artifact: "docs/qa/gates/epic-6-wave-4-design-gate.yml", blocking: 0 }
+    final: { status: pass_with_concerns, agent: "@qa", artifact: "docs/qa/gates/epic-6-final-gate.yml" }
+
+  metrics:
+    commits: 42
+    migrations: 5
+    tests: { before: 192, after: 333 }
+    gates: { typecheck: pass, lint: pass, test: "333 passed / 1 skipped", build: pass }
 
   decisions:
     - id: "DEC-1"
-      raised_by: "@qa (gate wave 2, issue #1)"
+      raised_by: "@qa (gate wave 2)"
       resolved_by: "@architect (emenda 1 do ADR) + @pm (escolha final)"
       status: resolved
-      problem: >-
-        Rate limiting na Server Action nao fecha click inflation: a RPC
-        record_link_click e grant execute to anon e chamavel direto no
-        PostgREST (provado: 20 curl = 20 cliques forjados). Chave do bucket
-        e hash(ip+linkId) e a RPC nao enxerga o IP do visitante confiavel.
-      resolution: >-
-        Teto movido para DENTRO da RPC, chaveado por link_id (unica identidade
-        autoritativa que o chamador nao escolhe). Camada 1 = teto 60/min/link
-        na RPC (alcanca o curl direto); camada 2 = 60/min/hash(ip+linkId) na
-        Server Action (NFR18 verbatim). @pm DESCARTOU a camada 3 (app-proof
-        com segredo server-only): resultado de seguranca identico (atacante
-        grava 60/min/link nas duas opcoes), comprava apenas folga para link
-        viral (600/min) ao custo de segredo semeado a mao fora do
-        versionamento em 2 ambientes + env novo + modo de falha adicional.
-        Simplicidade didatica prevalece. Sem TRACKING_APP_PROOF.
-      accepted_debt: >-
-        Link legitimamente viral acima de 60 cliques/min por link subnotifica
-        (analytics vira piso, nao total). Atacante direto ainda grava ate
-        60/min/link — rate limiting limita volume, nunca autenticidade.
-      critical_impl_note: >-
-        `drop function if exists public.record_link_click(uuid, text)` e
-        OBRIGATORIO: sem isso a assinatura antiga permanece publicada com
-        grant execute to anon e SEM TETO — o vetor ficaria aberto.
+      summary: >-
+        Rate limiting na Server Action nao fechava click inflation (RPC
+        chamavel direto no PostgREST, provado por curl). Teto movido para
+        dentro da RPC chaveado por link_id. @pm descartou a camada 3
+        (app-proof): seguranca identica, so compraria folga para link viral
+        ao custo de segredo semeado a mao em 2 ambientes.
+
+  # ──────────────────────────────────────────────────────────
+  # BLOQUEIA O MERGE — @devops (ver docs/qa/gates/epic-6-final-gate.yml)
+  # ──────────────────────────────────────────────────────────
+  merge_preconditions:
+    - id: "PRE-M1"
+      severity: blocking
+      task: >-
+        RATE_LIMIT_PEPPER como secret de REPOSITORIO no GitHub Actions (NAO
+        de environment). O job `quality` nao declara `environment:`, entao um
+        secret escopado ao environment production fica invisivel, a CI falha,
+        e como `migrate-production` tem `needs: quality` as migrations NAO
+        aplicam — main mergeada com codigo novo e schema velho.
+    - id: "PRE-M2/M3"
+      severity: blocking
+      task: "RATE_LIMIT_PEPPER na Vercel em Production E Preview (valores distintos)."
+    - id: "PRE-M4"
+      severity: blocking
+      task: >-
+        NEXT_PUBLIC_SUPABASE_URL disponivel em BUILD-TIME (a CSP passou a
+        depender dele; ausente, connect-src vira 'self' e o login quebra no
+        browser sem erro de servidor).
+    - id: "PRE-M5/M6"
+      severity: blocking
+      task: "Secrets do CD e dos testes de integracao da CI validos."
+    - id: "PRE-M7"
+      severity: high
+      task: >-
+        Verificacao POS-DEPLOY (nao opcional): o rate limiting depende do
+        owner das funcoes SECURITY DEFINER ter BYPASSRLS em producao. Em dev
+        e fato, em prod e inferencia, e o modo de falha e silencioso (o
+        exception engole, o limiter libera, nada fica vermelho). Checklist de
+        7 sondas no final gate.
+    - id: "PRE-M9"
+      severity: medium
+      task: "Tag v0.1.0 na main ANTES do merge (marca o MVP; Epic 6 e pos-MVP). Irreversivel."
+
+  owner_pending:
+    - "OWN-1: rodar docs/smoke-test.md (roteiro ATUALIZADO com 9 passos, inclui AC7 visual e rate limiting por ultimo)"
+    - "OWN-2: 3 reproducoes externas do setup local"
+    - "OWN-3: tag v0.1.0 + PRD para 1.0"
+    - "HD-1: validacao visual dos 3 temas (AC7 da 6.6) — nenhum agente conseguiu, extensao de browser desconectada"
