@@ -10,8 +10,8 @@ No MVP a autorização era **application-layer** (Server Actions filtram por
 `auth.uid()`), sem RLS. O Epic 6 **adiciona** RLS como segunda barreira, sem
 remover os filtros de aplicação (NFR3, defense-in-depth): `profiles` (Story 6.1,
 migration `20260719170252_profiles_rls.sql`) e `links` (Story 6.2, migration
-`20260719171040_links_rls.sql`) já estão com RLS ligada; `link_clicks` segue sem
-RLS até a Story 6.3. O ER abaixo
+`20260719171040_links_rls.sql`) e `link_clicks` (Story 6.3, migration
+`20260719180000_link_clicks_rls.sql`) já estão com RLS ligada. O ER abaixo
 reflete o schema **real aplicado** (`profiles`, migration `20260614220038`) e o
 schema **planejado** (`links`, Story 3.1).
 
@@ -133,19 +133,59 @@ no mesmo arquivo. Nomes conforme PRD Story 3.1 AC3 (L529).
 - **Sanitização de URL:** `sanitizeLinkUrl()` (Story 3.2) roda **antes** de qualquer
   INSERT/UPDATE — só `http(s)` chega ao DB.
 
-### `link_clicks` — ainda sem RLS (Story 6.3)
+### `link_clicks` — RLS aplicada (Story 6.3, `20260719180000_link_clicks_rls.sql`)
 
-- Autorização application-layer: `lib/analytics/clicks.ts` resolve primeiro os `link_id`
-  do próprio profile e só então lê a agregação restrita a esses ids.
-- A view `link_click_daily` ainda é legível por `anon` — vazamento ativo tratado na
-  Story 6.3 (ver inventário § 4/R3).
+| Policy | Comando | Roles | Predicado |
+|--------|---------|-------|-----------|
+| `link_clicks_select_own` | SELECT | `authenticated` | `EXISTS (select 1 from links l where l.id = link_clicks.link_id and l.profile_id = (select auth.uid()))` |
+
+- **NÃO existe policy de INSERT, UPDATE ou DELETE — e isso é o ponto.** Com RLS
+  habilitada, ausência de policy = **negação**. A tabela vira append-only *no banco*, e a
+  escrita direta com a anon key (que é pública, vai no bundle) passa a ser recusada —
+  fechando o concern MEDIUM do gate do Epic 5. A proposta `link_clicks_insert_active` do
+  inventário foi descartada pelo `@pm`: permitir INSERT em "qualquer link ativo" é
+  exatamente o abuso a fechar.
+- **`link_clicks` não tem `profile_id`;** o único caminho até o dono é o join lógico via
+  `links`, avaliado sob a RLS do chamador (daí a dependência da Story 6.2).
+- **Escrita: exclusividade da RPC `record_link_click(uuid, text) → boolean`**
+  (`SECURITY DEFINER`, `set search_path = public`, `revoke all from public` +
+  `grant execute to anon, authenticated`). Valida `links.is_active` e insere na **mesma
+  transação** — sem janela TOCTOU — e trunca o UA com `left(...,120)` em paridade com o
+  CHECK. Retorna `false` (sem gravar) para link inativo ou inexistente; nunca lança.
+  `lib/actions/track-click.ts` chama só ela, com `createPublicClient()`: **nenhum client
+  novo, nenhum env novo** — o padrão `createAdminClient`/service-role foi *refutado* pelo
+  ADR-001 § 2.
+- **App-layer intacta (NFR3):** `lib/analytics/clicks.ts` continua resolvendo os
+  `link_id` do profile antes de ler a agregação. A RLS soma.
+- **`ON DELETE CASCADE` inalterado:** ações de integridade referencial rodam por trigger
+  interno, fora do filtro de RLS e de GRANTs do chamador.
+
+### View `link_click_daily` — hardening (Story 6.3)
+
+Vazamento **ativo** até esta story: a view foi criada sem `security_invoker` (default
+`false`), logo executava com os privilégios do **owner** (`postgres`, que tem
+`BYPASSRLS`), e tinha `grant select ... to anon`. Habilitar RLS em `link_clicks` **não**
+teria fechado nada — a view furaria por cima, e qualquer um com a anon key leria a
+agregação de cliques de todos os perfis. Correções aplicadas na mesma migration:
+
+- `alter view public.link_click_daily set (security_invoker = on)` → executa com os
+  privilégios do **chamador**, respeitando `link_clicks_select_own`. Efeito registrado: o
+  `count(*)` passa a ser calculado sobre as linhas visíveis ao chamador — a semântica da
+  agregação muda **por role** (cada dono conta os próprios cliques).
+- `revoke all on public.link_click_daily from anon` (não só SELECT: o default do Supabase
+  concedia também INSERT/UPDATE/DELETE/TRUNCATE) e `revoke insert, update, delete,
+  truncate ... from authenticated`; `grant select ... to authenticated` permanece.
+- `grant select on public.link_clicks to authenticated` — **obrigatório**: com
+  `security_invoker`, o chamador precisa de privilégio na **tabela base**. Sem isso o
+  dashboard receberia `permission denied for table link_clicks`.
+- `revoke insert, update, delete, truncate on public.link_clicks from anon, authenticated`
+  — segunda camada sob a negação da RLS (não afeta a RPC, que roda como owner).
 
 ## Forward-looking (fora do Epic 3)
 
 | Entidade / mudança | Epic | Nota |
 |--------------------|------|------|
-| RLS + policies em `link_clicks` | Epic 6 | Story 6.3 — a RLS **soma** ao app-layer (NFR3), não o substitui. `profiles` (6.1) e `links` (6.2) já entregues. |
-| `security_invoker` + revogação de `anon` na view `link_click_daily` | Epic 6 | Story 6.3 — vazamento ativo hoje (ver inventário § 4/R3). |
+| `rate_limit_counters` + `check_rate_limit()` | Epic 6 | Story 6.4 — fecha o débito de **click inflation**: a RLS bloqueia ids inválidos/inativos, mas não impede POSTs repetidos à RPC contra um link **ativo legítimo**. Ver ADR-001 § 3. |
 
 > `link_clicks` (Epic 5, Story 5.1) já está entregue e documentada acima como
 > entidade real (schema aplicado). A coleta de cliques (Server Action com UA
