@@ -31,8 +31,7 @@ export function ClicksChart({ series, days }: { series: DailyClickPoint[]; days:
         role="img"
         aria-label={ariaLabel}
         viewBox={`0 0 ${geo.width} ${geo.height}`}
-        preserveAspectRatio="none"
-        className="h-56 w-full"
+        className="h-auto w-full"
       >
         {/* Grid + rótulos do eixo Y (recessivos) */}
         {geo.yTicks.map((tick) => (
