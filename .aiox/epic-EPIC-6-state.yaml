@@ -1,0 +1,42 @@
+epic_state:
+  epicId: EPIC-6
+  execution_plan: docs/stories/epics/epic-6/EPIC-6-EXECUTION.yaml
+  mode: yolo
+  started_at: "2026-07-19"
+  updated_at: "2026-07-19"
+  status: active
+  branch: feature/epic-6-security
+
+  current_wave: 1
+  total_waves: 4
+
+  prerequisites:
+    PRE-1: { status: in_progress, owner: "@architect" }
+    PRE-2: { status: pending, owner: "@dev" }
+    PRE-3: { status: pending, owner: "@devops", conditional: true }
+
+  waves:
+    1:
+      name: "RLS Foundation"
+      status: pending
+      stories:
+        "6.1": { status: pending, executor: "@dev", quality_gate: "@data-engineer" }
+        "6.2": { status: pending, executor: "@dev", quality_gate: "@data-engineer" }
+    2:
+      name: "Tracking Hardening"
+      status: pending
+      stories:
+        "6.3": { status: pending, executor: "@dev", quality_gate: "@qa" }
+    3:
+      name: "Rate Limiting"
+      status: pending
+      stories:
+        "6.4": { status: pending, executor: "@dev", quality_gate: "@qa" }
+    4:
+      name: "Edge & Polimento"
+      status: pending
+      stories:
+        "6.5": { status: pending, executor: "@dev", quality_gate: "@qa" }
+        "6.6": { status: pending, executor: "@dev", quality_gate: "@ux-design-expert" }
+
+  gate_verdicts: {}
