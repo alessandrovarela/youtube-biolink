@@ -53,7 +53,7 @@ tema **sobrescreve** (em branco = herda o valor light).
 | `--color-muted` | `#f1f5f9` | `#1a2233` | `#f0e9dd` | Superfícies secundárias (chips, hover ghost) |
 | `--color-muted-fg` | `#475569` | `#94a3b8` | `#5c4f42` | Texto secundário (username, captions, hints) |
 | `--color-border` | `#e2e8f0` | `#243046` | `#e5dbc8` | Bordas de cards, inputs, divisores |
-| `--color-accent` | `#2563eb` | `#60a5fa` | `#d97757` | Cor da marca / ações primárias, focus ring |
+| `--color-accent` | `#2563eb` | `#60a5fa` | `#b06046` | Cor da marca / ações primárias, focus ring |
 | `--color-accent-fg` | `#ffffff` | `#0b1220` | `#ffffff` | Texto/ícone sobre `--color-accent` |
 | `--color-accent-soft` | `#dbeafe` | `#1e3a5f` | `#f4ddd0` | Realce suave de accent (badges, destaques) |
 | `--color-surface` | `= --color-bg` | `= --color-bg` | `#ffffff` | Superfície elevada (cards, toasts); difere no accent para contraste |
@@ -257,7 +257,7 @@ São **3 temas**, definidos por classe no root. Helpers puros em
 |------|--------|---------------|-------------|
 | **light** | `:root` (sem classe) | Claro, neutro, azul (`#2563eb`) | Default; leitura diurna, alto contraste |
 | **dark** | `theme-dark` | Escuro, azul suave (`#60a5fa`), sombras como borda | Baixa luz, redução de brilho |
-| **accent** | `theme-accent` | Marca quente, fundo areia (`#edd3a9`), terracota (`#d97757`), surface branca | Identidade de marca, visual mais expressivo |
+| **accent** | `theme-accent` | Marca quente, fundo areia (`#edd3a9`), terracota (`#b06046`), surface branca | Identidade de marca, visual mais expressivo |
 
 ### 4.1 Como o usuário seleciona
 
@@ -305,23 +305,26 @@ oficial do W3C (luminância relativa sRGB → linear). Limiares: **texto normal 
 |------|-----|-----|-------|--------|-----------|
 | light | fg / bg | texto de corpo (normal) | 17.85:1 | 4.5:1 | ✅ PASS |
 | light | muted-fg / bg | username/secundário (normal) | 7.58:1 | 4.5:1 | ✅ PASS |
-| light | accent-fg / accent | rótulo botão primário (UI) | 5.17:1 | 3.0:1 | ✅ PASS |
+| light | accent-fg / accent | rótulo botão primário (normal) | 5.17:1 | 4.5:1 | ✅ PASS |
 | dark | fg / bg | texto de corpo (normal) | 15.12:1 | 4.5:1 | ✅ PASS |
 | dark | muted-fg / bg | username/secundário (normal) | 7.30:1 | 4.5:1 | ✅ PASS |
-| dark | accent-fg / accent | rótulo botão primário (UI) | 7.36:1 | 3.0:1 | ✅ PASS |
+| dark | accent-fg / accent | rótulo botão primário (normal) | 7.36:1 | 4.5:1 | ✅ PASS |
 | accent | fg / bg | texto de corpo (normal) | 12.59:1 | 4.5:1 | ✅ PASS |
 | accent | muted-fg / bg | username/secundário (normal) | 5.46:1 | 4.5:1 | ✅ PASS |
-| accent | accent-fg / accent | rótulo botão primário (UI) | 3.12:1 | 3.0:1 | ✅ PASS\* |
+| accent | accent-fg / accent | rótulo botão primário (normal) | 4.56:1 | 4.5:1 | ✅ PASS |
 
-### 5.2 Débito conhecido
+### 5.2 Débito quitado (Story 6.6)
 
-\* **`accent-fg` (`#ffffff`) sobre `accent` (`#d97757`) no tema _accent_ rende 3.12:1.**
-Atende AA para **componentes de UI e texto grande** (WCAG 1.4.11 / 1.4.3, ≥3:1),
-mas **não** para texto normal (<4.5:1). Afeta o rótulo do `Button variant="primary"`
-(font-medium, 14–15px) **apenas no tema accent**. A **página pública não usa esse par
-como texto** (link-rows usam `fg`/`bg`/`surface`; footer usa `fg`), então não há
-regressão de legibilidade na pública. **Follow-up recomendado (Epic 4/6):** escurecer
-levemente `--color-accent` do tema accent para elevar o par a ≥4.5:1.
+O débito registrado no Epic 4 — `accent-fg` (`#ffffff`) sobre `accent` (`#d97757`)
+rendendo **3.12:1**, abaixo de 4.5:1 para texto normal — foi **corrigido na Story 6.6**.
+O par é usado como **rótulo de texto** no `Button variant="primary"` (font-medium,
+14–15px), portanto rege-se por WCAG 1.4.3 (texto normal, 4.5:1), não por 1.4.11 (UI, 3:1).
+
+`--color-accent` do tema accent passou de `#d97757` → **`#b06046`** (escala RGB uniforme,
+k=0.81), preservando o matiz (H 14.8° → 14.7°) e elevando o par a **4.56:1**. O limiar do
+par em `tests/unit/a11y-contrast.test.ts` subiu de 3.0 para **4.5** nos 3 temas, de modo
+que a CI agora **barra regressão**. Focus ring (`accent` sobre `bg` `#edd3a9`) subiu de
+2.15:1 para **3.15:1**, passando a atender 1.4.11 (≥3:1) — antes não atendia.
 
 ---
 

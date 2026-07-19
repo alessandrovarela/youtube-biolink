@@ -39,7 +39,7 @@ function ThemeSwatches({ value = "light" }) {
   const themes = [
     { id: "light", label: "Light", strip: ["#FFFFFF", "#F1F5F9", "#2563EB"], border: "#E2E8F0", bg: "#FFFFFF", fg: "#0F172A" },
     { id: "dark", label: "Dark", strip: ["#0B1220", "#1A2233", "#60A5FA"], border: "#243046", bg: "#0B1220", fg: "#E5E7EB" },
-    { id: "accent", label: "Accent", strip: ["#FAF7F2", "#F0E9DD", "#D97757"], border: "#E5DBC8", bg: "#FAF7F2", fg: "#1A1410" },
+    { id: "accent", label: "Accent", strip: ["#FAF7F2", "#F0E9DD", "#B06046"], border: "#E5DBC8", bg: "#FAF7F2", fg: "#1A1410" },
   ];
   return (
     <div className="theme-grid">

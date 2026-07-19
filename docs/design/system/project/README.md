@@ -120,7 +120,7 @@ A single pair of neutral surfaces (`--color-bg`, `--color-fg`) plus a muted seco
 
 - **`light`** — `#FFFFFF` bg, `#0F172A` fg, `#2563EB` accent (a calm blue).
 - **`dark`** — `#0B1220` bg, `#E5E7EB` fg, `#60A5FA` accent (the same blue, lifted for contrast on dark).
-- **`accent`** — `#FAF7F2` warm-cream bg, `#1A1410` fg, `#D97757` accent (warm amber-clay).
+- **`accent`** — `#FAF7F2` warm-cream bg, `#1A1410` fg, `#B06046` accent (deep terracotta, WCAG AA 4.56:1 sobre branco).
 
 All three pass WCAG AA contrast on body and primary actions. Validated via `colors_and_type.css`.
 
