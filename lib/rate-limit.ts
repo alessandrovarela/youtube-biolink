@@ -1,6 +1,8 @@
 // Story 6.4 — Rate limiting application-layer (camada 2).
 //
-// Wrapper fino sobre a função SQL `check_rate_limit` (migration 20260719190000).
+// Wrapper fino sobre a função SQL `check_app_rate_limit` (migration 20260719200000 —
+// antes era `check_rate_limit`, que deixou de ser chamável por anon; ver issue #1 do
+// gate da Wave 3 e o cabeçalho daquela migration).
 // Toda a lógica de janela deslizante vive NO BANCO — aqui só se resolve a identidade
 // do chamador e se traduz o resultado. Isso é o que torna a decisão reversível: migrar
 // para Upstash depois seria trocar a implementação DESTE arquivo, e só dele.
@@ -28,11 +30,17 @@ import { createPublicClient } from '@/lib/supabase';
 export type RateLimitBucket = 'signup' | 'login' | 'reset' | 'track';
 
 /**
- * Targets do NFR18 — FIXOS. `limit` requisições por `windowSeconds`, com a janela
- * fatiada em sub-buckets de `bucketSeconds`.
- * [Source: PRD NFR18 · ADR-001 § 3, tabela de targets]
+ * Targets do NFR18 — FIXOS, e desde a correção da issue #1 do gate da Wave 3 eles NÃO
+ * SÃO MAIS ENVIADOS AO BANCO: vivem hardcoded dentro de `check_app_rate_limit`
+ * (migration 20260719200000). O chamador escolhe apenas QUEM ele é (o subject); QUANTO
+ * ele pode é decisão do banco.
+ *
+ * Esta constante permanece aqui como DOCUMENTAÇÃO E TRAVA DE CONTRATO: os testes de
+ * integração comparam estes números com o comportamento observado da função SQL, então
+ * um drift entre as duas cópias é detectado pela suíte em vez de passar em silêncio.
+ * [Source: PRD NFR18 · ADR-001 § 3 · gate Wave 3 issue #1]
  */
-const TARGETS: Record<
+export const TARGETS: Record<
   RateLimitBucket,
   { limit: number; windowSeconds: number; bucketSeconds: number }
 > = {
@@ -51,28 +59,69 @@ const TARGETS: Record<
 export const RATE_LIMIT_MESSAGE = 'Muitas tentativas. Aguarde alguns minutos e tente novamente.';
 
 /**
- * `RATE_LIMIT_PEPPER` ausente: o hash continua funcionando (o app NUNCA quebra por
- * causa disto), mas fica sujeito a enumeração — o espaço IPv4 tem 2^32 endereços e um
- * SHA-256 sem segredo é reversível por força bruta em minutos. Por isso a ausência é
- * avisada UMA VEZ no log do servidor, alto e claro, em vez de degradar em silêncio.
- * Não é uma credencial: seu vazamento permite correlacionar hashes de IP, e nada mais
- * — contraste didático com a service role key, que entregaria o banco inteiro.
- * [Source: Story 6.4 AC9/AC10 · risco R1]
+ * ┌────────────────────────────────────────────────────────────────────────────┐
+ * │ RATE_LIMIT_PEPPER — OBRIGATÓRIO EM PRODUÇÃO (issue #2 do gate da Wave 3)    │
+ * └────────────────────────────────────────────────────────────────────────────┘
+ * Até a Wave 3 a ausência do pepper era descrita como degradação de PRIVACIDADE
+ * ("permite correlacionar hashes de IP") e o app degradava com um aviso no log. O gate
+ * PROVOU que a classificação estava errada por uma ordem de grandeza:
+ *
+ *   com pepper vazio, o subject de auth é `sha256(':' + ip)` — uma função PÚBLICA, sem
+ *   segredo. O atacante não precisa "enumerar" nada: ele FORJA o balde de um IP
+ *   escolhido. 10 requisições anônimas negavam login àquele IP por 15 minutos.
+ *
+ * Ou seja: o pepper não é higiene de privacidade, é o CONTROLE DE SEGURANÇA que torna o
+ * `subject` imprevisível para quem não é o app. É o que impede o único vetor que a
+ * migration 20260719200000 não consegue fechar sozinha — o subject precisa vir do app,
+ * porque só o app enxerga o IP do visitante.
+ *
+ * POR ISSO O COMPORTAMENTO MUDOU DE "DEGRADAR" PARA "FALHAR ALTO":
+ *   • production sem pepper → lança na CARGA DO MÓDULO. O app não sobe. Um deploy mal
+ *     provisionado quebra ruidosamente no boot, e não silenciosamente meses depois numa
+ *     campanha de lockout que ninguém correlaciona. Fail-fast > fail-silent quando o
+ *     que falha é um controle de segurança.
+ *   • development/test sem pepper → fallback fixo e documentado + aviso ÚNICO e
+ *     explícito. Dev não pode exigir provisionamento manual para `pnpm dev` funcionar,
+ *     mas a diferença tem que estar registrada, não escondida.
+ *
+ * NÃO É UMA CREDENCIAL PRIVILEGIADA (contraste didático com a service role key, que
+ * entregaria o banco inteiro): vazar o pepper permite forjar baldes de rate limit — um
+ * problema de DISPONIBILIDADE —, não ler nem escrever dado de produto.
+ * [Source: Story 6.4 AC9/AC10 · risco R1 · gate Wave 3 issue #2]
  */
+const DEV_PEPPER_FALLBACK = 'dev-only-insecure-pepper-nao-usar-fora-de-development';
+
+const MISSING_PEPPER_ERROR =
+  '[rate-limit] RATE_LIMIT_PEPPER é OBRIGATÓRIO em produção e não está definido. ' +
+  'Sem ele o subject dos buckets de auth é sha256(":"+ip) — computável por qualquer ' +
+  'um — e um atacante nega login a IPs arbitrários (lockout). Provisione o env ' +
+  '(server-only, NUNCA NEXT_PUBLIC_*, `openssl rand -hex 32`, valor distinto por ' +
+  'ambiente) em production E preview antes do deploy.';
+
 let warnedAboutPepper = false;
 
-function pepper(): string {
-  const value = process.env.RATE_LIMIT_PEPPER ?? '';
-  if (!value && !warnedAboutPepper) {
+export function pepper(): string {
+  const value = (process.env.RATE_LIMIT_PEPPER ?? '').trim();
+  if (value) return value;
+
+  // FALHA ALTO em produção — nunca degrada silenciosamente um controle de segurança.
+  if (process.env.NODE_ENV === 'production') throw new Error(MISSING_PEPPER_ERROR);
+
+  if (!warnedAboutPepper) {
     warnedAboutPepper = true;
     console.warn(
-      '[rate-limit] RATE_LIMIT_PEPPER não definido — os hashes de IP ficam sujeitos a ' +
-        'enumeração do espaço IPv4. O rate limiting CONTINUA ATIVO. Provisione o env ' +
-        '(server-only, nunca NEXT_PUBLIC_*) em todos os ambientes.'
+      '[rate-limit] RATE_LIMIT_PEPPER não definido — usando o fallback FIXO de ' +
+        'development. Os subjects são previsíveis e forjáveis: aceitável só fora de ' +
+        'produção. Em production a ausência do env LANÇA e o app não sobe.'
     );
   }
-  return value;
+  return DEV_PEPPER_FALLBACK;
 }
+
+// Gate de INICIALIZAÇÃO: em produção a falta do pepper derruba a carga do módulo, e não
+// a primeira requisição. Falhar no boot é o que garante que um ambiente mal
+// provisionado nunca chegue a servir tráfego achando que está protegido.
+if (process.env.NODE_ENV === 'production') pepper();
 
 /**
  * IP do cliente a partir dos headers da borda da Vercel.
@@ -124,17 +173,19 @@ export async function checkRateLimit(
   extraKey?: string
 ): Promise<boolean> {
   try {
-    const target = TARGETS[bucket];
     const ip = await clientIp();
     const subject = extraKey ? subjectHash(ip, extraKey) : subjectHash(ip);
 
+    // 🔴 `check_app_rate_limit`, NÃO `check_rate_limit` (gate Wave 3, issue #1).
+    // A primitiva genérica virou INTERNA: anon perdeu o EXECUTE nela. Aqui só se envia
+    // QUEM é o chamador (o subject hasheado); o bucket é validado contra uma allowlist
+    // e os limites são hardcoded DENTRO da função SQL. Não há mais como um cliente com
+    // a anon key escolher balde, limite ou janela — era o que permitia esgotar o balde
+    // de um link de terceiro e forjar lockout de auth.
     const supabase = createPublicClient();
-    const { data, error } = await supabase.rpc('check_rate_limit', {
+    const { data, error } = await supabase.rpc('check_app_rate_limit', {
       p_bucket: bucket,
       p_subject: subject,
-      p_limit: target.limit,
-      p_window_seconds: target.windowSeconds,
-      p_bucket_seconds: target.bucketSeconds,
     });
 
     if (error) return true; // fail-open

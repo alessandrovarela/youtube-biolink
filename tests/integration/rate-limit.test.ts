@@ -18,11 +18,12 @@
 // contadores — a tabela rate_limit_counters é deny-all para anon/authenticated, então
 // só o service role consegue auditá-la).
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createAdminClient, createAnonClient, hasServiceRole } from './helpers/admin';
 import { uniqueTestUser } from './helpers/unique-user';
 import { deleteTestUsers } from './helpers/cleanup';
+import { TARGETS } from '@/lib/rate-limit';
 
 const suite = hasServiceRole() ? describe : describe.skip;
 
@@ -42,6 +43,8 @@ suite('Story 6.4 — rate limiting (db-layer, dev real)', () => {
   const admin = hasServiceRole() ? createAdminClient() : null;
   const createdUserIds: string[] = [];
   const usedBuckets: string[] = [];
+  /** Pares (bucket, subject) criados nos buckets REAIS do app — limpeza cirúrgica. */
+  const appSubjects: Array<[string, string]> = [];
 
   let anon: SupabaseClient;
   let activeLink = '';
@@ -53,7 +56,15 @@ suite('Story 6.4 — rate limiting (db-layer, dev real)', () => {
     return b;
   }
 
-  /** Chama a função SQL de limite com parâmetros explícitos (não os targets do app). */
+  /**
+   * Chama a PRIMITIVA `check_rate_limit` com parâmetros explícitos, para exercitar o
+   * MECANISMO (janela deslizante) com janelas curtas que o app nunca usa.
+   *
+   * ⚠️ VIA SERVICE ROLE, E ISSO É O PONTO. Desde a migration 20260719200000 esta função
+   * é INTERNA: `anon` perdeu o EXECUTE (issue #1 do gate da Wave 3). Se este helper
+   * usasse `anon`, todos os testes abaixo falhariam com 42501 — que é exatamente o que o
+   * bloco "a primitiva é inalcançável por anon" prova de propósito, mais abaixo.
+   */
   async function callLimit(
     bucket: string,
     subject: string,
@@ -61,7 +72,7 @@ suite('Story 6.4 — rate limiting (db-layer, dev real)', () => {
     windowSeconds: number,
     bucketSeconds = 60
   ): Promise<boolean> {
-    const { data, error } = await anon.rpc('check_rate_limit', {
+    const { data, error } = await admin!.rpc('check_rate_limit', {
       p_bucket: bucket,
       p_subject: subject,
       p_limit: limit,
@@ -70,6 +81,16 @@ suite('Story 6.4 — rate limiting (db-layer, dev real)', () => {
     });
     expect(error).toBeNull();
     return data as boolean;
+  }
+
+  /** Chama o WRAPPER público como anon — o caminho REAL do app (lib/rate-limit.ts). */
+  async function callApp(bucket: string, subject: string) {
+    return anon.rpc('check_app_rate_limit', { p_bucket: bucket, p_subject: subject });
+  }
+
+  /** Subject sintético no formato exigido (digest hex de 64 chars). */
+  function hex64(seed: string): string {
+    return createHash('sha256').update(seed).digest('hex');
   }
 
   /** Soma AUTORITATIVA de hits de uma chave (service role — a tabela é deny-all). */
@@ -122,6 +143,10 @@ suite('Story 6.4 — rate limiting (db-layer, dev real)', () => {
     if (admin) {
       for (const b of usedBuckets) {
         await admin.from('rate_limit_counters').delete().eq('bucket', b);
+      }
+      // Buckets REAIS do app: apagar por bucket varreria dados legítimos — só o par exato.
+      for (const [b, s] of appSubjects) {
+        await admin.from('rate_limit_counters').delete().eq('bucket', b).eq('subject', s);
       }
       if (activeLink) {
         await admin.from('rate_limit_counters').delete().eq('bucket', 'track_link').eq('subject', activeLink);
@@ -330,4 +355,177 @@ suite('Story 6.4 — rate limiting (db-layer, dev real)', () => {
     // Se uma sobrecarga com parâmetro extra existisse, ele apareceria aqui.
     expect(props).toEqual(['p_link_id', 'p_user_agent_short']);
   }, 30_000);
+
+  // ══════════════════════════════════════════════════════════════════════
+  // ISSUE #1 (HIGH) DO GATE DA WAVE 3 — o limiter não é mais uma primitiva
+  // de ESCRITA remota. Estes testes são a TRAVA DE REGRESSÃO pedida pela
+  // issue #6 do mesmo gate ("nenhum teste cobre o abuso de check_rate_limit
+  // chamada diretamente por anon").
+  //
+  // Cada teste reproduz literalmente uma das três probes do @qa e assere o
+  // fechamento. Se alguém reconceder `execute to anon` na primitiva, ou
+  // afrouxar a allowlist do wrapper, a suíte quebra aqui.
+  // ══════════════════════════════════════════════════════════════════════
+  describe('🔴 check_rate_limit é INTERNA — os 3 abusos do gate da Wave 3', () => {
+    it('anon NÃO consegue chamar a primitiva check_rate_limit (42501)', async () => {
+      const { data, error } = await anon.rpc('check_rate_limit', {
+        p_bucket: 'login',
+        p_subject: hex64('qualquer'),
+        p_limit: 10,
+        p_window_seconds: 900,
+        p_bucket_seconds: 60,
+      });
+
+      expect(error).not.toBeNull();
+      expect(error!.code).toBe('42501');
+      expect(String(error!.message).toLowerCase()).toContain('permission denied');
+      expect(data).toBeNull();
+    });
+
+    it('🔴 (a) SUPRESSÃO DE ANALYTICS fechada: anon não esgota o balde de um link alheio', async () => {
+      // O ABUSO ORIGINAL: 60 chamadas a check_rate_limit('track_link', <link_id>)
+      // esgotavam o balde de um link de TERCEIRO sem gravar clique nenhum, e o clique
+      // legítimo seguinte era recusado. O link_id é público por design, então o pepper
+      // não protegia — só o revoke protege.
+      const { data: other } = await admin!
+        .from('links')
+        .insert({
+          profile_id: createdUserIds[0],
+          title: 'Alvo da supressão',
+          url: 'https://example.net/',
+          position: 9,
+          is_active: true,
+        })
+        .select('id')
+        .single();
+      const victim = other!.id as string;
+
+      // 1) A via direta está fechada.
+      for (let i = 0; i < 5; i++) {
+        const { error } = await anon.rpc('check_rate_limit', {
+          p_bucket: 'track_link',
+          p_subject: victim,
+          p_limit: 60,
+          p_window_seconds: 60,
+          p_bucket_seconds: 10,
+        });
+        expect(error!.code).toBe('42501');
+      }
+
+      // 2) A via do wrapper também: 'track_link' não está na allowlist...
+      const viaWrapper = await callApp('track_link', victim);
+      expect(viaWrapper.error).not.toBeNull();
+      expect(viaWrapper.error!.message).toContain('nao permitido');
+
+      // 3) ...e nem passaria pelo formato do subject (link_id é uuid, não 64-hex).
+      const viaTrack = await callApp('track', victim);
+      expect(viaTrack.error).not.toBeNull();
+      expect(viaTrack.error!.message).toContain('digest hex de 64 chars');
+
+      // 4) Nada foi escrito no balde da vítima.
+      const { data: counters } = await admin!
+        .from('rate_limit_counters')
+        .select('hits')
+        .eq('bucket', 'track_link')
+        .eq('subject', victim);
+      expect(counters).toHaveLength(0);
+
+      // 5) E o TRACKING LEGÍTIMO do link continua funcionando — o que prova, de quebra,
+      //    que record_link_click (SECURITY DEFINER) ainda chama a primitiva internamente
+      //    como OWNER, mesmo depois de anon perder o EXECUTE. É o fato que faz o
+      //    desenho inteiro funcionar.
+      const { data: ok, error: clickErr } = await anon.rpc('record_link_click', {
+        p_link_id: victim,
+        p_user_agent_short: 'SUPRESSAO-PROBE',
+      });
+      expect(clickErr).toBeNull();
+      expect(ok).toBe(true);
+
+      await admin!.from('link_clicks').delete().eq('link_id', victim);
+      await admin!.from('rate_limit_counters').delete().eq('bucket', 'track_link').eq('subject', victim);
+    }, 60_000);
+
+    it('🔴 (b) LOCKOUT DE AUTH: o subject forjado com pepper vazio não alcança mais a primitiva', async () => {
+      // O ABUSO ORIGINAL: com pepper vazio o subject era sha256(':'+ip) — público. 10
+      // chamadas anônimas negavam login a um IP arbitrário por 15 min.
+      // Duas correções independentes fecham o vetor:
+      //   1. este teste — a primitiva ficou inalcançável por anon;
+      //   2. lib/rate-limit.ts — o pepper virou OBRIGATÓRIO em produção, então o subject
+      //      deixou de ser computável mesmo pelo caminho que continua aberto (o wrapper).
+      const forged = createHash('sha256').update(['', '203.0.113.77'].join(':')).digest('hex');
+
+      const { error } = await anon.rpc('check_rate_limit', {
+        p_bucket: 'login',
+        p_subject: forged,
+        p_limit: 10,
+        p_window_seconds: 900,
+        p_bucket_seconds: 60,
+      });
+      expect(error!.code).toBe('42501');
+
+      // Nenhum contador foi criado para o IP forjado.
+      const { data: rows } = await admin!
+        .from('rate_limit_counters')
+        .select('hits')
+        .eq('bucket', 'login')
+        .eq('subject', forged);
+      expect(rows).toHaveLength(0);
+    });
+
+    it('🔴 (c) BUCKET ARBITRÁRIO rejeitado pela allowlist — nada é persistido (NFR8)', async () => {
+      for (const bad of ['lixo', 'qa_gate_probe', 'track_link', 'TRACK', '']) {
+        const { data, error } = await callApp(bad, hex64(`arbitrario-${bad}`));
+        expect(error, `bucket '${bad}' deveria ser recusado`).not.toBeNull();
+        expect(error!.code).toBe('22023');
+        expect(error!.message).toContain('nao permitido');
+        expect(data).toBeNull();
+      }
+
+      const { data: rows } = await admin!
+        .from('rate_limit_counters')
+        .select('bucket')
+        .in('bucket', ['lixo', 'qa_gate_probe', 'TRACK', '']);
+      expect(rows).toHaveLength(0);
+    });
+
+    it('subject fora do formato 64-hex é recusado — NFR19 como invariante do BANCO', async () => {
+      // Impede IP em claro, uuid e payload arbitrário grande de entrar na tabela.
+      for (const bad of ['203.0.113.77', randomUUID(), 'Z'.repeat(64), 'a'.repeat(63), 'A'.repeat(64)]) {
+        const { error } = await callApp('login', bad);
+        expect(error, `subject '${bad.slice(0, 20)}' deveria ser recusado`).not.toBeNull();
+        expect(error!.message).toContain('digest hex de 64 chars');
+      }
+    });
+
+    it('o wrapper aplica os limites do NFR18 SEM recebê-los do chamador', async () => {
+      // A prova de que a política mudou de lado: o cliente não manda p_limit nenhum e
+      // ainda assim é barrado exatamente no teto do bucket. `reset` = 3/hora (o menor
+      // dos targets, o mais barato de exercitar).
+      const subject = hex64(`reset-${randomUUID()}`);
+      appSubjects.push(['reset', subject]);
+
+      for (let i = 0; i < TARGETS.reset.limit; i++) {
+        const { data, error } = await callApp('reset', subject);
+        expect(error).toBeNull();
+        expect(data).toBe(true);
+      }
+
+      const { data: blocked } = await callApp('reset', subject);
+      expect(blocked).toBe(false);
+
+      // E o consumo registrado é exatamente o teto — os bloqueios não incrementaram.
+      expect(await totalHits('reset', subject)).toBe(TARGETS.reset.limit);
+    }, 30_000);
+
+    it('cada bucket da allowlist é aceito e tem contador independente', async () => {
+      for (const bucket of ['signup', 'login', 'reset', 'track'] as const) {
+        const subject = hex64(`allow-${bucket}-${randomUUID()}`);
+        appSubjects.push([bucket, subject]);
+        const { data, error } = await callApp(bucket, subject);
+        expect(error, `bucket '${bucket}' deveria ser aceito`).toBeNull();
+        expect(data).toBe(true);
+        expect(await totalHits(bucket, subject)).toBe(1);
+      }
+    }, 30_000);
+  });
 });

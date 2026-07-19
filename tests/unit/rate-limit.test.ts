@@ -9,7 +9,8 @@
 // exercida contra o BANCO REAL em tests/integration/rate-limit.test.ts (virada de
 // janela, limite exato e o caso "já estourou não incrementa"), que é uma prova
 // estritamente mais forte. [Source: Story 6.4 AC15/AC16]
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 
 // ── Mocks ──────────────────────────────────────────────────────────────
 let mockHeaders: Record<string, string | null>;
@@ -24,7 +25,14 @@ vi.mock('@/lib/supabase', () => ({
   createPublicClient: () => mockClient,
 }));
 
-import { checkRateLimit, clientIp, subjectHash, RATE_LIMIT_MESSAGE } from '@/lib/rate-limit';
+import {
+  checkRateLimit,
+  clientIp,
+  subjectHash,
+  pepper,
+  TARGETS,
+  RATE_LIMIT_MESSAGE,
+} from '@/lib/rate-limit';
 
 type RpcResult = { data?: unknown; error?: unknown };
 
@@ -108,14 +116,69 @@ describe('subjectHash', () => {
     expect(subjectHash('203.0.113.7')).not.toBe(a);
   });
 
-  it('continua funcionando sem RATE_LIMIT_PEPPER (o app NUNCA quebra por isso)', () => {
-    // Comportamento documentado: degrada a privacidade do hash, não a disponibilidade.
+  it('o IP em claro NÃO aparece no digest', () => {
+    expect(subjectHash('203.0.113.7')).not.toContain('203.0.113.7');
+  });
+});
+
+// ── RATE_LIMIT_PEPPER OBRIGATÓRIO (issue #2 do gate da Wave 3) ──────────
+//
+// O gate provou que a ausência do pepper não é degradação de privacidade e sim um vetor
+// de LOCKOUT DE AUTENTICAÇÃO: com pepper vazio o subject é sha256(':'+ip), computável
+// por qualquer um. Estes testes travam o comportamento novo — falhar ALTO em produção,
+// fallback documentado fora dela.
+describe('RATE_LIMIT_PEPPER — obrigatório em produção', () => {
+  // `process.env.NODE_ENV` tem descritor não-configurável sob o Node do vitest; a única
+  // via suportada de alterná-lo é o stubEnv, que também restaura sozinho.
+  const setNodeEnv = (v: string) => vi.stubEnv('NODE_ENV', v);
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('🔴 em produção SEM pepper: LANÇA — o app não sobe degradado', () => {
     delete process.env.RATE_LIMIT_PEPPER;
+    setNodeEnv('production');
+    expect(() => pepper()).toThrow(/RATE_LIMIT_PEPPER é OBRIGATÓRIO/);
+  });
+
+  it('🔴 a mensagem do erro explica o risco REAL (lockout), não só privacidade', () => {
+    delete process.env.RATE_LIMIT_PEPPER;
+    setNodeEnv('production');
+    let msg = '';
+    try {
+      pepper();
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    expect(msg.toLowerCase()).toContain('lockout');
+    expect(msg).toContain('NUNCA NEXT_PUBLIC_');
+  });
+
+  it('em produção COM pepper: não lança e usa o valor do env', () => {
+    process.env.RATE_LIMIT_PEPPER = 'pepper-de-producao';
+    setNodeEnv('production');
+    expect(pepper()).toBe('pepper-de-producao');
+  });
+
+  it('pepper só de espaços em branco conta como AUSENTE (não vira segredo vazio)', () => {
+    process.env.RATE_LIMIT_PEPPER = '   ';
+    setNodeEnv('production');
+    expect(() => pepper()).toThrow(/RATE_LIMIT_PEPPER é OBRIGATÓRIO/);
+  });
+
+  it('fora de produção SEM pepper: usa fallback fixo e NÃO lança', () => {
+    delete process.env.RATE_LIMIT_PEPPER;
+    setNodeEnv('development');
+    expect(() => pepper()).not.toThrow();
     expect(subjectHash('203.0.113.7')).toMatch(HEX64);
   });
 
-  it('o IP em claro NÃO aparece no digest', () => {
-    expect(subjectHash('203.0.113.7')).not.toContain('203.0.113.7');
+  it('o fallback de development é DIFERENTE do pepper vazio que o gate explorou', () => {
+    // Com pepper '' o subject era sha256(':'+ip) — o valor exato que o gate forjou.
+    // O fallback não pode reproduzi-lo, senão a "correção" seria cosmética em dev.
+    delete process.env.RATE_LIMIT_PEPPER;
+    setNodeEnv('development');
+    const forged = createHash('sha256').update(['', '203.0.113.77'].join(':')).digest('hex');
+    expect(subjectHash('203.0.113.77')).not.toBe(forged);
   });
 });
 
@@ -130,19 +193,39 @@ describe('checkRateLimit — targets do NFR18', () => {
   ];
 
   it.each(cases)(
-    'bucket %s → limite %i em %is (sub-bucket %is)',
-    async (bucket, limit, windowSeconds, bucketSeconds) => {
-      await checkRateLimit(bucket, bucket === 'track' ? 'link-1' : undefined);
-
-      expect(mockClient.calls).toHaveLength(1);
-      const [fn, args] = mockClient.calls[0];
-      expect(fn).toBe('check_rate_limit');
-      expect(args.p_bucket).toBe(bucket);
-      expect(args.p_limit).toBe(limit);
-      expect(args.p_window_seconds).toBe(windowSeconds);
-      expect(args.p_bucket_seconds).toBe(bucketSeconds);
+    'TARGETS documenta bucket %s → limite %i em %is (sub-bucket %is)',
+    (bucket, limit, windowSeconds, bucketSeconds) => {
+      // Os valores NÃO trafegam mais na chamada (ver o teste abaixo): vivem hardcoded em
+      // check_app_rate_limit. TARGETS é a cópia de referência do NFR18 e a trava contra
+      // drift — tests/integration/rate-limit.test.ts confronta estes números com o
+      // comportamento REAL da função SQL.
+      expect(TARGETS[bucket]).toEqual({ limit, windowSeconds, bucketSeconds });
     }
   );
+
+  it('🔴 chama check_app_rate_limit e envia SÓ bucket e subject — nunca limite/janela', async () => {
+    // A trava de regressão da issue #1 do gate da Wave 3 no lado do app.
+    // Se algum dia alguém voltar a chamar `check_rate_limit` com p_limit vindo daqui, o
+    // limiter volta a ser uma primitiva de escrita remota — e este teste falha.
+    await checkRateLimit('login');
+
+    expect(mockClient.calls).toHaveLength(1);
+    const [fn, args] = mockClient.calls[0];
+    expect(fn).toBe('check_app_rate_limit');
+    expect(Object.keys(args).sort()).toEqual(['p_bucket', 'p_subject']);
+    expect(args.p_bucket).toBe('login');
+    for (const forbidden of ['p_limit', 'p_window_seconds', 'p_bucket_seconds']) {
+      expect(args).not.toHaveProperty(forbidden);
+    }
+  });
+
+  it('cada bucket é enviado com o próprio nome (a allowlist do banco depende disso)', async () => {
+    for (const bucket of ['signup', 'login', 'reset', 'track'] as const) {
+      mockClient = makeClient({ data: true });
+      await checkRateLimit(bucket, bucket === 'track' ? 'link-1' : undefined);
+      expect(mockClient.calls[0][1].p_bucket).toBe(bucket);
+    }
+  });
 
   it('NUNCA envia IP raw ao banco — p_subject é sempre 64 hex', async () => {
     // A asserção central de NFR19 no lado do app.
