@@ -1,0 +1,827 @@
+epic: EPIC-6
+wave: 3
+title: "Rate Limiting (signup, login, reset, tracking) — Quality Gate"
+gate_agent: "@qa (Quinn)"
+date: "2026-07-19"
+branch: "feature/epic-6-security"
+commit: "c55db73"
+verdict: CONCERNS
+
+# ── Resultado por story ─────────────────────────────────────
+stories:
+  - id: "6.4"
+    title: "Rate limiting (signup, login, reset, tracking)"
+    verdict: CONCERNS
+    acs_met: "17/19 literalmente · 19/19 em intenção"
+    note: >-
+      O contrato central da story foi CUMPRIDO e PROVADO por este gate de forma
+      independente: o vetor de click inflation do gate da Wave 2 está FECHADO (ataque
+      reproduzido do zero, 61ª chamada barrada). O veredito é CONCERNS por um achado
+      adversarial NOVO deste gate: a própria função `check_rate_limit` é
+      `grant execute to anon` com `p_bucket` e `p_subject` INTEIRAMENTE controlados pelo
+      chamador, o que a transforma numa primitiva de ESCRITA remota nos contadores.
+      Provado: silenciamento de analytics de qualquer link e — com o pepper ausente —
+      lockout de login por IP. Ver issue #1.
+
+# ── Item 1: O ATAQUE, REPRODUZIDO POR ESTE GATE ─────────────
+# NÃO são os números do @dev. Reproduzido do zero com curl e a anon key crua de
+# .env.local contra o PostgREST de development, sem tocar no Next.js.
+adversarial_attack_reproduced:
+  target: "rjsvkwjgsctqsswrospx (youtube-biolink-dev) — POST /rest/v1/rpc/record_link_click"
+  link: "a22e0cf2-62f8-4f08-8372-4570b208015d (link ativo real, o mesmo do gate da Wave 2)"
+  method: "curl sequencial, apikey + Authorization com a NEXT_PUBLIC_SUPABASE_ANON_KEY crua"
+  probe_tag: "user_agent_short='QA-GATE-W3-PROBE' (para cleanup cirúrgico)"
+  results:
+    clicks_before: 1
+    calls_fired: 75
+    responses_true: 60
+    responses_false: 15
+    first_refusal: "chamada #61"
+    last_acceptance: "chamada #60"
+    clicks_after: 61
+    probe_rows_written: 60
+    window: "18:17:30 → 18:17:46 UTC (16s)"
+  sub_buckets_left:
+    - { window_start: "18:17:30+00", hits: 41 }
+    - { window_start: "18:17:40+00", hits: 19 }
+  sum_of_hits: 60
+  non_increment_proof: >-
+    A soma dos sub-buckets é 60, NÃO 75. As 15 requisições estouradas NÃO incrementaram
+    o contador — o `return false` antes do upsert (AC3) está correto e o risco R4
+    ("estouro estende a punição indefinidamente") está fechado. Prova de quebra
+    independente, reproduzida por este gate.
+  verdict: PASS
+  closes: >-
+    concern #1 (medium) do gate da Wave 2 — FECHADO E PROVADO. Antes desta story as 75
+    chamadas teriam gravado 75 cliques (o gate da Wave 2 provou com 20/20). O vetor está
+    fechado como BYPASS: nenhum caminho escapa do teto.
+  state_restored:
+    status: CONFIRMED
+    how: >-
+      `delete from public.link_clicks where user_agent_short in ('QA-GATE-W3-PROBE',
+      'QA-GATE-W3-LEGIT')` + remoção dos sub-buckets `track_link` dos dois links tocados,
+      dos buckets sintéticos `qa_gate%` e do subject de login forjado.
+    verification: >-
+      Releitura após o cleanup: probe_clicks=0, probe_buckets=0, forged_login=0 e a
+      contagem do link a22e0cf2 de volta a 1 (valor pré-ataque). Nenhum artefato deste
+      gate permanece em development.
+
+# ── Item 2: ASSINATURA ÚNICA DA RPC (risco nº1 da story) ────
+# Uma sobrecarga antiga com `grant execute to anon` e SEM TETO reabriria o vetor inteiro.
+rpc_signature_audit:
+  method: "Leitura direta do catálogo (pg_proc/pg_namespace) via Management API — não o relatório do @dev."
+  functions_found:
+    - proname: record_link_click
+      args: "p_link_id uuid, p_user_agent_short text"
+      prosecdef: true
+      proconfig: "{search_path=public}"
+      proacl: "{postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}"
+      count: 1
+    - proname: check_rate_limit
+      args: "p_bucket text, p_subject text, p_limit integer, p_window_seconds integer, p_bucket_seconds integer"
+      prosecdef: true
+      proconfig: "{search_path=public}"
+      proacl: "{postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}"
+      count: 1
+  verdict: PASS
+  reasoning: >-
+    EXATAMENTE UMA `public.record_link_click` publicada, com a assinatura (uuid, text)
+    inalterada. Nenhuma sobrecarga órfã sem teto ficou publicada — o `create or replace`
+    substituiu o corpo da MESMA função, como o @dev argumentou, e a ausência do
+    `drop function` do § 6.4(b) do ADR é de fato desnecessária SEM a camada 3. O
+    raciocínio do @dev está correto e foi verificado no catálogo, não aceito no relatório.
+    A ausência da entrada `=X/postgres` (PUBLIC) no proacl das DUAS funções confirma que
+    os `revoke all ... from public` pegaram. Os três controles obrigatórios do ADR-001 § 4
+    (search_path fixo, PUBLIC revogado, grant explícito mínimo) estão aplicados em ambas.
+  regression_lock: >-
+    tests/integration/rate-limit.test.ts assere via OpenAPI do PostgREST que a RPC publica
+    exatamente {p_link_id, p_user_agent_short}. Trava adequada — um parâmetro a mais
+    denunciaria a sobrecarga.
+
+# ── Item 3: CAMADA 3 — nada vazou para o código ─────────────
+layer_3_containment:
+  requested_check: "sem p_app_proof, sem private.app_secrets, sem TRACKING_APP_PROOF"
+  code_scan: >-
+    grep em lib/ app/ components/ supabase/ tests/ .env.example — ZERO ocorrências em
+    código executável. As duas únicas menções estão em COMENTÁRIOS da migration
+    (linhas 31 e 43), explicando por que a camada foi descartada e por que o
+    `drop function` deixou de ser necessário. Uso correto e didático.
+  db_scan: "select nspname from pg_namespace where nspname='private' → [] (schema não existe em development)."
+  signature_unchanged: "record_link_click permanece (uuid, text) — sem o terceiro parâmetro."
+  verdict: PASS
+  note: >-
+    A arbitragem do @pm foi implementada com FIDELIDADE: teto único de 60/min/link na RPC
+    + 60/min/hash(ip+linkId) na Server Action. Nenhum resíduo da camada 3 no runtime.
+
+# ── Item 4: TENTATIVAS DE EVASÃO (probes próprias) ──────────
+evasion_attempts:
+  - vector: "Variar o subject para escapar do teto de tracking"
+    result: NOT_POSSIBLE
+    why: >-
+      No teto da camada 1 o subject é `p_link_id::text`, derivado DENTRO da RPC do
+      parâmetro que identifica o próprio recurso alvo. O chamador não escolhe a chave: se
+      mudar o link_id, ataca outro link e paga outro balde. É exatamente o desenho que a
+      Emenda 1 § 6.3 pedia — chave que o banco conhece de forma autoritativa.
+  - vector: "pg_advisory_xact_lock não serializa sob concorrência (race read-modify-write)"
+    result: SERIALIZES_CORRECTLY
+    proof: >-
+      Probe deste gate: 40 chamadas SIMULTÂNEAS (curl em background, wait) ao mesmo
+      bucket/subject com p_limit=20. Resultado no banco: sum(hits) = EXATAMENTE 20.
+      Nenhuma passou do teto, nenhum hit se perdeu. O lock de escopo de transação faz o
+      check+increment ser atômico de verdade.
+  - vector: "Burst de 2x na virada de janela (defeito clássico do contador fixo)"
+    result: NOT_PRESENT
+    why: >-
+      A janela é a SOMA dos sub-buckets com `window_start > now - p_window_seconds`, e não
+      um contador que zera. Não existe instante em que o consumo caia a zero de uma vez.
+    residual: >-
+      Existe um erro de granularidade INFERIOR, não superior a 2x: um sub-bucket é
+      descartado quando seu INÍCIO envelhece além da janela, então hits feitos no fim
+      daquele sub-bucket saem da conta até `p_bucket_seconds` cedo. Teto efetivo máximo
+      ≈ limit * (janela + bucket) / janela → tracking: até ~72/min em vez de 60 (+16%);
+      auth: +1.7% (bucket de 60s numa janela de 900/3600s). Bounded e aceitável. Ver issue #5.
+  - vector: "Housekeeping apaga contadores VIVOS"
+    result: IMPOSSIBLE
+    why: >-
+      O delete usa `window_start < now() - interval '24 hours'` e a janela mais longa em
+      uso é 3600s (signup/reset). Uma linha viva tem no máximo 1h — nunca entra no
+      critério. Margem de 24x. O risco R7 está fechado corretamente.
+    caveat: >-
+      Só deixaria de valer se alguém chamasse check_rate_limit com p_window_seconds > 86400.
+      Nenhum caminho do app faz isso (TARGETS é constante); um chamador direto que o
+      fizesse prejudicaria apenas o próprio balde.
+  - vector: "🔴 Disparar o fail-open DE PROPÓSITO para DESLIGAR o limiter"
+    result: NOT_ACHIEVABLE_NO_TRACKING_PATH
+    analysis: >-
+      ESTA ERA A PERGUNTA MAIS IMPORTANTE DO GATE. Julgamento: NÃO é explorável para
+      desligar o teto de tracking, e a razão é estrutural.
+      Dentro de `record_link_click` a chamada é
+      `check_rate_limit('track_link', p_link_id::text, 60, 60, 10)` — bucket, limite,
+      janela e sub-bucket são LITERAIS no corpo da função. O atacante não controla NENHUM
+      argumento capaz de provocar exceção; o único valor que ele fornece (p_link_id) é
+      tipado uuid e validado contra `links` antes. Não há entrada que faça o handler
+      disparar e liberar a escrita.
+    empirical_finding: >-
+      Probe deste gate: chamada DIRETA com p_bucket_seconds=0 → o erro 22012
+      "division by zero" PROPAGOU ao cliente (HTTP 400), NÃO foi capturado como `true`.
+      Motivo: v_now/v_window_start/v_slot são inicializados no bloco DECLARE, que fica
+      FORA do `begin ... exception when others`. Ou seja, o fail-open é MENOS abrangente
+      do que a AC5/AC14 e o comentário da migration afirmam — para exceções do DECLARE a
+      função falha FECHADA (propaga erro). Isso é irrelevante para a segurança (nenhum
+      caminho do app passa parâmetros variáveis), mas invalida a afirmação literal de que
+      "a função nunca lança". Ver issue #3.
+    residual_risk: >-
+      O fail-open permanece disparável por falha GENUÍNA de infraestrutura (lock timeout,
+      statement_timeout, bloat da tabela) — e essas condições correlacionam com CARGA, ou
+      seja, o limiter tende a abrir exatamente quando mais importa. É o trade-off que o
+      ADR contratou conscientemente e este gate NÃO o trata como defeito. A ressalva é que
+      a issue #1 dá ao atacante um caminho para INFLAR a tabela de contadores, o que
+      aproxima essas condições — é o elo entre as duas.
+  - vector: "🔴 check_rate_limit como PRIMITIVA DE ESCRITA remota (achado novo)"
+    result: EXPLOITABLE
+    severity: high
+    detail: "Ver issue #1 — o achado central deste gate, provado por três probes."
+
+# ── Item 5: NFR19 — nenhum IP raw persistido ────────────────
+nfr19_no_raw_ip:
+  schema_check:
+    columns: "bucket text · subject text · window_start timestamptz · hits int"
+    verdict: PASS
+    why: "Nenhuma coluna de IP existe na tabela. link_clicks também segue sem coluna de IP."
+  data_check:
+    method: "Consulta ao DADO real em development, por bucket, com regex — não leitura de código."
+    results:
+      - bucket: track
+        rows: 16
+        matching_hex64: 16
+        ip_like: 0
+      - bucket: track_link
+        rows: 33
+        matching_hex64: 0
+        ip_like: 0
+    verdict: PASS_WITH_DEVIATION
+    why: >-
+      ZERO subjects com forma de IP (v4 ou v6) em qualquer bucket. O NFR19 — que proíbe
+      PERSISTIR IP RAW — está CUMPRIDO integralmente, verificado no dado e não só no código.
+      Os buckets de aplicação (`track`, e por construção `signup`/`login`/`reset`) são
+      100% hex de 64 chars. O bucket `track_link` usa o `link_id` (uuid) como subject:
+      não é PII e não é IP, mas NÃO casa com `^[0-9a-f]{64}$`. Ver issue #4.
+  pepper_leak_check:
+    verdict: PASS
+    why: >-
+      Auditado o caminho todo: `pepper()` retorna o valor mas NUNCA o imprime — a mensagem
+      de warning cita apenas o NOME do env. `subjectHash` só devolve o digest. Nenhum
+      console.log/error com o pepper, nenhum caminho que o envie ao banco (o que trafega
+      é o hash) e nenhuma exceção que o inclua. O valor não aparece em log nem em erro.
+  ip_ephemeral:
+    verdict: PASS
+    why: >-
+      `clientIp()` lê os headers e o valor morre no escopo da função — só o digest sai.
+      Extração correta: leftmost de `x-forwarded-for` (o cliente), fallback `x-real-ip`,
+      fallback `'unknown'`. Nunca gravado, logado nem enviado.
+
+# ── Item 6: comportamento sem RATE_LIMIT_PEPPER ─────────────
+missing_pepper_behavior:
+  claim_by_dev: "degrada com aviso único no log e o limiter continua ativo"
+  verified: TRUE_BUT_SEVERITY_UNDERSTATED
+  code_verification: >-
+    `let warnedAboutPepper` no escopo do módulo + guarda `if (!value && !warnedAboutPepper)`
+    → exatamente UM console.warn por processo. `pepper()` retorna '' e o hash continua sendo
+    calculado, então `checkRateLimit` segue consultando o banco e barrando normalmente.
+    A afirmação do @dev está CORRETA como descrita.
+  environment_finding: >-
+    ⚠️ `.env.local` (development) NÃO define RATE_LIMIT_PEPPER — nem como chave vazia. O
+    `.env.example` o lista com valor VAZIO. Ou seja, o modo degradado é o modo ATUAL de
+    development, e será o de produção se o gate de merge do @devops (AC9) não for cumprido.
+  severity_judgment: >-
+    JULGAMENTO DESTE GATE: a documentação da story, do .env.example e do handoff classificam
+    a ausência do pepper como degradação de PRIVACIDADE ("permite enumerar o espaço IPv4",
+    "correlacionar hashes"). Isso SUBESTIMA o impacto de forma material.
+    Combinado com o `grant execute on check_rate_limit to anon` (issue #1), um pepper vazio
+    torna o subject dos buckets de auth INTEIRAMENTE COMPUTÁVEL por qualquer um:
+    `sha256([''  , ip].join(':'))`. O atacante deixa de precisar "enumerar" e passa a poder
+    FORJAR o balde de uma vítima específica.
+    PROVADO POR PROBE DESTE GATE — ver issue #2. A ausência do pepper não é só um problema
+    de privacidade: é um vetor de NEGAÇÃO DE SERVIÇO de autenticação.
+
+# ── Item 7: os 3 endpoints de auth ──────────────────────────
+auth_endpoints:
+  targets_verified:
+    - { endpoint: signUp, bucket: signup, limit: 5, window_s: 3600, bucket_s: 60, subject: "hash(ip)", matches_nfr18: true }
+    - { endpoint: signIn, bucket: login, limit: 10, window_s: 900, bucket_s: 60, subject: "hash(ip)", matches_nfr18: true }
+    - { endpoint: requestPasswordReset, bucket: reset, limit: 3, window_s: 3600, bucket_s: 60, subject: "hash(ip)", matches_nfr18: true }
+  placement:
+    verdict: PASS
+    why: >-
+      Nos TRÊS a chamada é a PRIMEIRA instrução do corpo — antes da leitura do FormData, da
+      validação, do round-trip ao GoTrue e do hash de senha. É o ponto todo de um limiter:
+      cortar antes do trabalho caro. Verificado linha a linha no diff contra main.
+  generic_message:
+    verdict: PASS
+    value: "'Muitas tentativas. Aguarde alguns minutos e tente novamente.'"
+    no_mechanism_leak: >-
+      Não contém "rate limit", contador, janela nem Retry-After. Nenhum header
+      X-RateLimit-* / Retry-After é emitido (o OUT da story foi respeitado).
+    no_account_enumeration:
+      verdict: PASS
+      reasoning: >-
+        A mensagem é uma CONSTANTE de módulo (RATE_LIMIT_MESSAGE), retornada ANTES de
+        qualquer consulta que pudesse distinguir conta existente de inexistente. Como o
+        limiter é chaveado por IP e é avaliado antes do e-mail sequer ser lido do FormData,
+        o retorno é BIT A BIT IDÊNTICO exista ou não a conta. Risco R2 fechado.
+    distinguishable_from_bad_credentials:
+      verdict: PASS_BY_DESIGN
+      analysis: >-
+        Verificado adversarialmente: a mensagem de estouro ('Muitas tentativas...') É
+        DIFERENTE da de credencial errada ('E-mail ou senha inválidos'). Isso é CORRETO e
+        não é um vazamento: distinguir "você está limitado" de "sua senha está errada" não
+        revela NADA sobre a existência de conta — as duas mensagens são invariantes em
+        relação ao e-mail digitado. O oposto (mensagem idêntica) seria hostil ao usuário
+        legítimo, que ficaria sem saber por que não entra. O que a AC12 exige — e o que
+        está cumprido — é que a mensagem não permita ENUMERAR CONTAS.
+
+# ── Item 8: tracking — contrato fire-and-forget ─────────────
+tracking_contract:
+  silent_noop_on_limit:
+    verdict: PASS
+    why: >-
+      Camada 2: `if (!(await checkRateLimit('track', id))) return { ok:false, error: GENERIC_ERROR }`.
+      Camada 1: a RPC devolve `false`, que cai em `if (data !== true) return { ok:false, ... }`.
+      Os dois estouros viram ActionResult tipado. NENHUM throw em nenhum caminho.
+  navigation_never_blocked:
+    verdict: PASS
+    why: >-
+      components/public/TrackedLink.tsx NÃO está no diff da branch — o comportamento de
+      navegação das Stories 5.2/5.3 (incluindo o fix do clique fantasma) está intocado.
+      trackLinkClick continua envolto em try/catch com guarda de último recurso; o retorno
+      nunca é renderizado na UI.
+  fire_and_forget_intact:
+    verdict: PASS
+    why: >-
+      O contrato de retorno (ActionResult) é idêntico ao anterior — o caller não tem como
+      perceber que existe rate limiting. Nenhuma mensagem nova chega à UI.
+  order_of_layers:
+    verdict: PASS
+    why: >-
+      A camada 2 roda ANTES do round-trip ao banco (corta cedo, economiza a chamada); a
+      camada 1 roda dentro da RPC. Correto: quem já estourou o próprio balde nem chega a
+      consumir conexão de banco para a escrita.
+  D9_accepted: >-
+    'Link não encontrado ou inativo' também é retornado quando o teto do link estoura.
+    Aceito: a string nunca é renderizada (fire-and-forget) e o significado ampliado está
+    comentado no código. Equivalência comportamental preservada.
+
+# ── Item 9: os 2 testes que mudaram de expectativa ──────────
+changed_test_expectations_audit:
+  question: "fortalecimento legítimo ou mascaramento de regressão?"
+  verdict: FORTALECIMENTO_LEGÍTIMO — NÃO É MASCARAMENTO
+  files:
+    - "tests/integration/link-clicks-rls.test.ts — 'SELECT anônimo em link_clicks é NEGADO por PRIVILÉGIO (duas camadas)'"
+    - "tests/integration/link-clicks.test.ts — bloco final do teste de isolamento"
+  before: "expect(error).toBeNull() + expect(data).toHaveLength(0)   // 200 [] — RLS filtrando em silêncio"
+  after:  "expect(error).not.toBeNull() + 'permission denied' + expect(data).toBeNull()   // 42501"
+  reasoning: >-
+    Auditado contra a fraude mais provável (afrouxar a asserção para acomodar uma quebra).
+    O MOVIMENTO É O CONTRÁRIO: as duas asserções ficaram ESTRITAMENTE MAIS FORTES. Antes
+    aceitavam qualquer resposta bem-sucedida e vazia; agora exigem um erro específico, com
+    substring específica, e data === null. Um `200 []` — que ANTES passava — hoje FALHA.
+    Nenhuma asserção foi removida, nenhum expect virou no-op, nenhum client anon foi trocado
+    por service role (a fraude que o gate da Wave 2 procurou).
+    A mudança de comportamento é a CONSEQUÊNCIA DIRETA E PRETENDIDA do
+    `revoke select on link_clicks from anon` — que era literalmente a recomendação do
+    concern #2 do gate da Wave 2. O comportamento observável passou de negação silenciosa
+    pela RLS (uma camada) para negação por privilégio com a RLS atrás (duas camadas).
+    Atualizar a expectativa aqui não é acomodar regressão: é registrar que o resultado
+    contratado foi atingido.
+  closes: "concern #2 (low) do gate da Wave 2 — FECHADO."
+
+# ── Item 10: segurança da migration para o CD de produção ───
+migration_safety:
+  file: "supabase/migrations/20260719190000_rate_limit.sql"
+  atomicity: >-
+    PASS — tabela, índice, enable RLS, revokes, check_rate_limit, grants, o teto dentro de
+    record_link_click e o revoke do concern #2 vivem no MESMO arquivo (decisão #5a). Roda em
+    transação: não existe janela com a tabela criada sem a RLS que a torna privada, nem com
+    a RPC republicada sem o teto que a protege.
+  ordering: >-
+    PASS — 20260719190000 > 20260719180000 (Wave 2) > 20260719171040 > 20260719170252 >
+    20260702120000 (última aplicada em prod). Aplicação lexicográfica correta e as quatro
+    migrations da branch entram no MESMO run do CD, em ordem.
+  dependency_on_wave_2:
+    status: SATISFIED_IN_SAME_RUN
+    detail: >-
+      Esta migration faz `create or replace function record_link_click` e
+      `revoke select on link_clicks from anon` — ambos dependem de objetos criados em
+      20260719180000, que tem versão MENOR e portanto roda antes no mesmo push. Verificado
+      no preflight: em produção record_link_click AINDA NÃO EXISTE (rlc_fn_count=0), o que
+      confirma que a Wave 2 e a Wave 3 vão para produção juntas.
+  production_preflight:
+    project: "bmyijncgsiubufwhttul (youtube-biolink-prod)"
+    latest_version_applied: "20260702120000"
+    rate_limit_counters_exists: false
+    record_link_click_count: 0
+    verdict: >-
+      PASS — a migration aplicará LIMPO. `create table public.rate_limit_counters` não colide
+      (a relação não existe em prod). O `create or replace` de record_link_click encontra a
+      função recém-criada pela migration da Wave 2 no mesmo run. Os revokes incidem sobre
+      grants que existem de fato (default do Supabase). Nenhum statement destrutivo, nenhum
+      DROP, nenhuma linha alterada ou apagada.
+  destructive_statements: none
+  data_loss_risk: none
+  rollback: >-
+    Trivial: DROP FUNCTION check_rate_limit, DROP TABLE rate_limit_counters, re-GRANT do
+    select em link_clicks para anon e `create or replace` da versão 6.3 de record_link_click.
+    Nenhum dado de produto é tocado — rate_limit_counters é efêmera por natureza.
+  runtime_deploy_ordering:
+    risk: LOW
+    why: >-
+      Nas duas ordens possíveis (migration antes do deploy da Vercel ou vice-versa) o efeito
+      é benigno. Se o código novo chamar check_rate_limit antes da migration: erro da RPC →
+      `checkRateLimit` faz fail-open → nada é bloqueado. Se a migration entrar antes do
+      código: o teto na RPC já vale e o app antigo simplesmente não consulta a camada 2.
+      Em nenhum caso a navegação do visitante ou o login quebram.
+  env_gate:
+    status: BLOCKING_PRECONDITION
+    detail: "RATE_LIMIT_PEPPER deve estar provisionado em production E preview ANTES do merge (AC9). Ver issue #2 — este gate ELEVA a justificativa desse gate de privacidade para disponibilidade."
+
+# ── Item 11: gates executados PELO GATE (números REAIS) ─────
+gates_run:
+  typecheck: "PASS (exit 0, tsc --noEmit, sem saída)"
+  lint: "PASS (exit 0, eslint, sem saída)"
+  test_full_worktree: "PASS — 41 arquivos passed | 1 skipped (42); 296 testes passed | 1 skipped (297); 24.24s"
+  test_story_6_4_scope: "PASS — 40 arquivos passed | 1 skipped (41); 287 testes passed | 1 skipped (288); 23.93s"
+  baseline_claimed_by_dev: 287
+  discrepancy_investigated:
+    finding: RECONCILED_NOT_AN_ISSUE
+    detail: >-
+      A suíte completa deu 296, não os 287 alegados. Investigado antes de reportar como
+      achado: a diferença são 9 testes de `tests/unit/middleware.test.ts`, arquivo
+      NÃO-RASTREADO (git status: `??`) da Story 6.5, em andamento pelo @dev na mesma branch.
+      Reexecutando com `--exclude tests/unit/middleware.test.ts` o resultado é EXATAMENTE
+      287 passed + 1 skipped. O número do @dev está CORRETO para o escopo da 6.4 e a
+      discrepância é integralmente atribuível a trabalho fora deste gate.
+  test_delta: "+54 sobre o baseline da Wave 2 (233 → 287)"
+  progression: "192 (Epic 5) → 219 (Wave 1) → 233 (Wave 2) → 287 (Wave 3)"
+  note: "Todos os números REPRODUZIDOS por este gate do zero, não lidos do relatório do @dev."
+
+# ── Rastreabilidade das 19 ACs ──────────────────────────────
+ac_traceability:
+  total: 19
+  met_literally: 17
+  met_in_intent: 19
+  method: "Cada AC verificada por probe própria, leitura de catálogo, leitura de código ou execução de teste."
+  blocks:
+    A_infra_db: >-
+      AC1-AC6 — PASS com desvio literal em AC1. Tabela, PK composta e índice conferidos no
+      schema; RLS habilitada sem policy + revoke de anon/authenticated; check_rate_limit com
+      security definer, search_path=public, advisory lock (provado sob 40 chamadas
+      concorrentes), soma da janela, não-incremento no estouro (provado), housekeeping de 24h
+      (matematicamente incapaz de apagar linha viva) e fail-open comentado; grants explícitos
+      e notify pgrst presentes. AC1 exige subject "sempre digest hex de 64 chars" e o bucket
+      track_link usa uuid — ver issue #4.
+    B_helper: >-
+      AC7-AC10 — PASS. Zero dependência nova (package.json intocado; node:crypto e
+      next/headers são built-in/já em uso). clientIp com leftmost/x-real-ip/'unknown'. Hash
+      SHA-256 com pepper. RATE_LIMIT_PEPPER em .env.example, server-only, sem NEXT_PUBLIC_.
+      Nenhuma secret privilegiada introduzida — o contraste com a service role key está
+      registrado. Ver issue #2 quanto à CLASSIFICAÇÃO de severidade da ausência.
+    C_targets: "AC11 — PASS. Os 4 buckets com os targets exatos do NFR18, verificados em TARGETS e no ponto de aplicação de cada action."
+    D_overflow_behavior: "AC12-AC14 — PASS. Mensagem genérica sem enumeração; tracking no-op silencioso; fail-open (com a ressalva estrutural da issue #3)."
+    E_tests: >-
+      AC15-AC19 — PASS com desvio literal em AC17. AC15 é satisfeita por testes de
+      INTEGRAÇÃO e não unitários — julgado CORRETO (ver test_quality). AC17 assere 64-hex
+      "em todas as linhas" e o bucket track_link não casa — ver issue #4. Migration aplicada
+      em development e confirmada no catálogo por este gate.
+
+# ── Qualidade dos testes ────────────────────────────────────
+test_quality:
+  new_tests: 54
+  new_files: ["tests/unit/rate-limit.test.ts (33)", "tests/unit/auth-rate-limit.test.ts (11)", "tests/integration/rate-limit.test.ts (25)"]
+  db_layer: true
+  tautological: none
+  masked_fixes: none
+  sliding_window_placement:
+    dev_argument: "reimplementar a janela em TS para 'testar em unit' seria tautológico — validaria a cópia, não o código que roda"
+    qa_verdict: CONCORDO — É A CHAMADA CERTA
+    why: >-
+      A janela vive inteiramente na função SQL. Um teste unitário em TS que a reimplementasse
+      passaria mesmo que a função SQL estivesse quebrada — é o anti-padrão clássico. Testá-la
+      contra o banco REAL (incluindo virada de janela com espera real e o caso "já estourou
+      não incrementa") é estritamente mais forte. O `tests/unit/rate-limit.test.ts` cobre o
+      que de fato é TS: clientIp, subjectHash, os targets e o fail-open. Divisão correta.
+  gap_noted: >-
+    Nenhum teste exercita `check_rate_limit` sendo chamada DIRETAMENTE por um cliente anon
+    com bucket/subject arbitrários — que é exatamente o vetor da issue #1. A trava de
+    regressão da assinatura cobre record_link_click, mas não cobre o abuso da primitiva.
+
+# ── Conformidade arquitetural ───────────────────────────────
+architectural_conformance:
+  adr_001_followed: true
+  emenda_1_layers_1_and_2: true
+  layer_3_correctly_omitted: true       # arbitragem do @pm, sem resíduo no código
+  pm_arbitration_respected: true
+  no_service_role_in_runtime: true
+  zero_new_dependencies: true           # package.json intocado
+  app_layer_preserved_nfr3: true        # o rate limiting SOMOU, nada foi removido
+  no_invention: true                    # nada de captcha/WAF/ban/pg_cron/fingerprint
+  table_and_rls_same_migration: true    # decisão #5a
+  nfr19_no_raw_ip: true
+  secdef_three_controls: true           # search_path fixo, PUBLIC revogado, grant mínimo
+
+# ── Issues / concerns ───────────────────────────────────────
+concerns:
+  - id: 1
+    severity: high
+    category: security
+    story: "6.4"
+    status: open
+    title: "check_rate_limit é `grant execute to anon` com bucket e subject controlados pelo chamador — o limiter virou uma primitiva de ESCRITA remota"
+    description: >-
+      ACHADO CENTRAL DESTE GATE. Para que `lib/rate-limit.ts` funcione (ele usa
+      createPublicClient, ou seja, a anon key), a AC6 concede
+      `grant execute on check_rate_limit to anon`. Mas a função aceita `p_bucket`,
+      `p_subject`, `p_limit`, `p_window_seconds` e `p_bucket_seconds` INTEIRAMENTE do
+      chamador e INCREMENTA a tabela de contadores. Qualquer pessoa de posse da anon key
+      pública pode, portanto, escrever em qualquer balde de qualquer sujeito.
+      Isso inverte a natureza do controle: um mecanismo defensivo passa a ser utilizável
+      COMO ARMA contra o próprio produto. Não está coberto por nenhuma AC nem por nenhum
+      dos débitos D1-D9 aceitos pela story.
+    proof: >-
+      TRÊS PROBES DESTE GATE contra development, todas com a anon key crua e sem tocar no
+      Next.js:
+      (a) SILENCIAMENTO DE ANALYTICS — 60 chamadas a
+      check_rate_limit('track_link', '<link_id>', 60, 60, 10) contra o link ativo
+      6da450c3-a1ab-4447-a45f-7aa8801eb9a6, que gravaram ZERO cliques. Em seguida, uma
+      chamada LEGÍTIMA a record_link_click nesse link retornou `false` e não gravou nada
+      (verificado: 0 linhas). O atacante esgotou o balde de um link de terceiro sem
+      produzir um único registro, silenciando a analytics daquele link enquanto quiser, a
+      60 req/min. É MAIS BARATO E MAIS DISCRETO que a click inflation que a story fecha.
+      (b) LOCKOUT DE AUTENTICAÇÃO (condicionado ao pepper — ver issue #2).
+      (c) CRESCIMENTO IRRESTRITO DA TABELA — buckets arbitrários ('qa_gate_probe',
+      'qa_gate_conc') foram aceitos e persistidos. Como (bucket, subject) é livre, um
+      atacante cria linhas ilimitadas em rate_limit_counters; o housekeeping só remove o
+      que tem mais de 24h. Pressão de armazenamento no free tier, contra o NFR8.
+    impact: >-
+      Novo vetor de negação de serviço, remoto e não autenticado, INTRODUZIDO por esta
+      story. O vetor (a) não é mitigado pelo pepper: o subject do bucket track_link é o
+      próprio link_id, que é PÚBLICO por design (links_select_public_active permite ao anon
+      listar todos os links ativos). Balanço honesto: a story LIMITA a inflação de cliques e
+      ABRE a supressão de cliques — do ponto de vista de integridade de analytics é
+      aproximadamente uma troca, não um ganho líquido.
+    why_not_blocking: >-
+      Não bloqueia o merge da wave. (1) O objetivo contratado da story — fechar o bypass de
+      click inflation — foi cumprido e provado. (2) O impacto é volumétrico/disponibilidade,
+      não confidencialidade nem integridade de esquema: nada vaza, nada é corrompido, nenhum
+      privilégio escala. (3) O grant é exigido pela própria AC6 — o @dev implementou o
+      contrato com fidelidade; o defeito é de DESENHO (ADR-001 § 3), não de execução, e
+      corrigi-lo é decisão de @architect/@pm, exatamente como o concern #1 da Wave 2 foi
+      roteado. (4) Em produção o vetor (b) fica fechado assim que o gate de merge da AC9 for
+      cumprido.
+    recommendation: >-
+      @architect / @pm — decidir CONSCIENTEMENTE, não por omissão (mesmo padrão do concern #1
+      da Wave 2). Opções, da mais forte à mais barata:
+      (a) REVOGAR `execute` de anon em check_rate_limit e expor, no lugar, uma RPC por
+      bucket que derive internamente bucket/limite/janela (o chamador só fornece o subject),
+      eliminando a escolha do balde e dos parâmetros;
+      (b) manter o grant mas VALIDAR dentro da função: allowlist de p_bucket e limites/janelas
+      derivados do bucket (ignorando os valores recebidos), o que mata (c) e reduz muito (a);
+      (c) aceitar formalmente e registrar como débito D10, com o pepper como controle
+      compensatório de (b) — insuficiente para (a).
+      Recomendo (b): é uma migration pequena, não muda a interface do helper e fecha os três
+      sub-vetores exceto a supressão por link, que exigiria (a).
+  - id: 2
+    severity: medium
+    category: security
+    story: "6.4"
+    status: action_for_devops
+    title: "RATE_LIMIT_PEPPER ausente não é só degradação de privacidade — é lockout de autenticação por IP"
+    description: >-
+      A story (AC9), o .env.example e o handoff descrevem a ausência do pepper como perda de
+      PRIVACIDADE ("hash sujeito a enumeração do espaço IPv4", "permite correlacionar hashes").
+      A afirmação funcional do @dev foi VERIFICADA e está correta — aviso único no log, limiter
+      continua ativo. Mas a CLASSIFICAÇÃO DE SEVERIDADE está subestimada.
+      Com pepper vazio, o subject dos buckets de auth é `sha256([''  , ip].join(':'))` — uma
+      função pública, sem segredo. Combinado com a issue #1 (anon pode escrever em qualquer
+      balde), o atacante não precisa "enumerar" nada: ele FORJA o balde de um IP escolhido.
+    proof: >-
+      PROBE DESTE GATE. Calculado, com o mesmo algoritmo de lib/rate-limit.ts e pepper vazio,
+      o subject do IP 203.0.113.77 →
+      684064235b913936c6e149acdfb5f37f154595d7e609ca73415cbf9d26ada393.
+      Disparadas 10 chamadas anônimas a check_rate_limit('login', <subject>, 10, 900, 60):
+      todas retornaram `true`. A 11ª — que é exatamente o que a tentativa de login REAL
+      daquela vítima avaliaria — retornou `false`. Ou seja: 10 requisições HTTP
+      não autenticadas bastam para negar login a um IP arbitrário por 15 minutos. Com o
+      bucket `reset` (limite 3, janela 3600s) são 3 requisições para 1 hora; com `signup`,
+      5 para 1 hora. Contadores removidos no cleanup.
+    environment_finding: >-
+      `.env.local` NÃO define RATE_LIMIT_PEPPER e `.env.example` o traz VAZIO — este é o
+      estado ATUAL de development e será o de produção se o gate de merge não for cumprido.
+    recommendation: >-
+      @devops — o gate de merge da AC9 é CONFIRMADO COMO BLOQUEANTE por este gate, e sua
+      justificativa muda de privacidade para DISPONIBILIDADE. Provisionar
+      `RATE_LIMIT_PEPPER` (openssl rand -hex 32) em production E preview na Vercel ANTES do
+      merge; valores DIFERENTES por ambiente. Definir também em `.env.local` para que
+      development deixe de rodar no modo degradado.
+      @dev / @sm — corrigir o texto de .env.example, do handoff e das Dev Notes: a ausência
+      do pepper habilita lockout de auth por IP, não apenas correlação de hashes. Enquanto a
+      issue #1 não for resolvida, o pepper é um CONTROLE DE SEGURANÇA, não um reforço de
+      privacidade.
+  - id: 3
+    severity: low
+    category: code
+    story: "6.4"
+    status: open
+    title: "O fail-open não cobre o bloco DECLARE — a função PODE lançar, ao contrário do que AC5/AC14 e a migration afirmam"
+    description: >-
+      `v_now`, `v_window_start` e `v_slot` são inicializados na seção DECLARE, que fica FORA
+      do `begin ... exception when others then return true`. Exceções levantadas ali
+      PROPAGAM ao chamador em vez de virar `true`. A migration afirma, em comentário, que
+      "um limiter quebrado NUNCA derruba o produto: ele libera" — isso não vale para essa
+      janela.
+    proof: >-
+      PROBE DESTE GATE: chamada direta com p_bucket_seconds=0 retornou
+      {"code":"22012","message":"division by zero"} (HTTP 400), e não `true`.
+    impact: >-
+      NENHUM no runtime atual, e este gate verificou por quê: em record_link_click os cinco
+      argumentos são LITERAIS no corpo da função, e em lib/rate-limit.ts vêm da constante
+      TARGETS. Nenhum caminho do produto passa valor variável capaz de disparar exceção no
+      DECLARE. Além disso, se propagasse via record_link_click, o erro viraria
+      `{ ok:false }` em trackLinkClick — o contrato fire-and-forget continua honrado.
+      É um defeito de PRECISÃO DA AFIRMAÇÃO, não de comportamento observável.
+    recommendation: >-
+      Baixa prioridade. Mover as inicializações para dentro do bloco `begin` (declarar sem
+      valor e atribuir depois) faz o fail-open ser realmente total, ou então ajustar o
+      comentário da migration e a redação da AC5 para dizer "o corpo executável falha
+      aberto". Preferir a primeira: o comentário é material didático e deve descrever o
+      código com exatidão.
+  - id: 4
+    severity: low
+    category: requirements
+    story: "6.4"
+    status: open
+    title: "AC1 e AC17 exigem subject 64-hex em TODAS as linhas; o bucket track_link usa uuid"
+    description: >-
+      A AC1 determina que "`subject` é sempre um digest hex de 64 chars — nunca IP raw" e a
+      AC17 assere que "`subject` casa com ^[0-9a-f]{64}$ em TODAS as linhas". O bucket
+      `track_link`, criado pela Emenda 1, grava o `link_id` (uuid, 36 chars com hífens).
+      Verificado no dado: 33 linhas em track_link, 0 casando com o regex.
+      O @dev contornou reformulando a verificação para "buckets de APP", o que não é o texto
+      da AC.
+    impact: >-
+      NENHUM em segurança ou privacidade. O NFR19 proíbe persistir IP RAW e isso está
+      integralmente cumprido — confirmado por este gate no DADO: zero subjects com forma de
+      IPv4 ou IPv6 em qualquer bucket. Um link_id é um identificador de recurso público, não
+      PII, e o próprio comentário da migration argumenta isso corretamente. É desvio de
+      TEXTO DE AC, não de intenção: as ACs foram escritas antes da Emenda 1 e não
+      acompanharam a introdução do bucket track_link.
+    recommendation: >-
+      @po / @sm — emendar a redação da AC1/AC17 para refletir a Emenda 1: "subject é um
+      digest hex de 64 chars para os buckets derivados de IP (signup/login/reset/track); para
+      o bucket track_link é o link_id (uuid, não-PII). Em nenhum caso um IP raw é
+      persistido." Registrar como correção de contrato, não como defeito de implementação.
+      A trava automatizada deveria asserir a regra POR BUCKET.
+  - id: 5
+    severity: info
+    category: code
+    story: "6.4"
+    status: accepted
+    title: "Granularidade dos sub-buckets permite excesso limitado sobre o teto nominal"
+    description: >-
+      A janela descarta um sub-bucket quando seu INÍCIO envelhece além de p_window_seconds,
+      então hits feitos no fim daquele sub-bucket saem da conta até p_bucket_seconds cedo.
+      O teto sustentado efetivo é ≈ limit * (janela + bucket) / janela.
+      Tracking (60s/10s): até ~72/min em vez de 60 (+16%). Auth (900s ou 3600s com bucket de
+      60s): +6,7% e +1,7%.
+    impact: >-
+      Desprezível e na direção segura do ponto de vista de disponibilidade. NÃO é o "burst de
+      2x na virada" que o contador fixo teria — esse defeito está corretamente ausente, como
+      as Dev Notes afirmam. Registrado apenas para que o número 60 não seja lido como um teto
+      matematicamente rígido numa auditoria futura.
+    recommendation: "Sem ação. Reduzir p_bucket_seconds aumentaria a precisão ao custo de mais linhas; a troca atual está bem calibrada."
+  - id: 6
+    severity: low
+    category: tests
+    story: "6.4"
+    status: open
+    title: "Nenhum teste cobre o abuso de check_rate_limit chamada diretamente por anon"
+    description: >-
+      A suíte tem trava de regressão para a assinatura de record_link_click (via OpenAPI),
+      mas nada exercita `check_rate_limit` sendo invocada direto pelo PostgREST com bucket e
+      subject arbitrários — o vetor da issue #1. Uma futura alteração de grants passaria
+      despercebida.
+    recommendation: >-
+      Ao endereçar a issue #1, adicionar em tests/integration/rate-limit.test.ts um teste que
+      chame check_rate_limit como anon com um p_bucket fora da allowlist e espere recusa — a
+      trava que torna a correção permanente.
+  - id: 7
+    severity: low
+    category: tests
+    story: "6.4"
+    status: accepted
+    title: "Smoke pela UI real não reexecutado por este gate"
+    description: >-
+      O T7 do @dev reporta `pnpm dev` verde e as rotas respondendo, mas este gate não abriu o
+      navegador para estourar o login e ver a mensagem genérica renderizada, nem clicou num
+      link real. Mesmo débito do concern #6 da Wave 2.
+    recommendation: >-
+      Aceito. A cobertura db-layer usa as formas de query exatas do produto e a suíte de
+      integração roda contra o banco de development real. Um estouro manual de login e um
+      clique real antes do merge continuam recomendados — baratos, e fecham junto com a
+      verificação pós-deploy já pendente.
+
+# ── Concerns herdados ───────────────────────────────────────
+inherited_concerns:
+  - id: 1
+    from: "wave-2 #1"
+    title: "A mitigação planejada para click inflation NÃO fecha o caminho direto à RPC"
+    status: CLOSED
+    note: >-
+      FECHADO E PROVADO POR ESTE GATE de forma independente. A Emenda 1 foi implementada
+      (camadas 1 e 2), o teto passou para dentro de record_link_click chaveado por link_id, e
+      o ataque de 75 chamadas curl diretas foi barrado na 61ª. A recomendação (b) do concern
+      ("bucket por linkId apenas") foi a escolhida pelo @pm e está corretamente executada.
+  - id: 2
+    from: "wave-2 #2"
+    title: "anon manteve GRANT SELECT em link_clicks"
+    status: CLOSED
+    note: >-
+      FECHADO. `revoke select, references, trigger on public.link_clicks from anon` está no
+      bloco 4 da migration, e os dois testes afetados foram atualizados para asserir a
+      negação por PRIVILÉGIO (42501) — mais forte que o `200 []` anterior. A ressalva do @dev
+      de PRESERVAR o select de `authenticated` (exigido pela view com security_invoker) está
+      correta e evitou derrubar o dashboard de analytics.
+  - id: 3
+    from: "wave-2 #3"
+    title: "janela não-ordenada entre a migration de produção e o deploy da Vercel"
+    status: STILL_OPEN
+    note: "Ação de @devops. Amplificada por esta wave — ver migration_safety.runtime_deploy_ordering (risco continua LOW: fail-open nos dois sentidos)."
+  - id: 5
+    from: "wave-2 #5"
+    title: "revisão de DDL pelo @data-engineer"
+    status: STILL_OPEN
+    note: >-
+      Não executada. Este gate auditou a DDL nova (check_rate_limit) adversarialmente e
+      ENCONTROU achado — a issue #1. Reforça o valor da revisão formal: @pm deve decidir se a
+      dispensa ou se a exige antes do fechamento do epic.
+  - id: 2
+    from: "wave-1 #2"
+    title: "verificação pós-deploy de ISR em produção"
+    status: STILL_OPEN
+    note: "Ação de @devops, não reaberta por esta story. Consolidar num único passo pós-merge."
+
+blocking_issues: []
+
+merge_preconditions:
+  - owner: "@devops"
+    precondition: >-
+      RATE_LIMIT_PEPPER provisionado em production E preview na Vercel ANTES do merge (AC9).
+      Já era contratado pela story; este gate o CONFIRMA como bloqueante e eleva sua
+      justificativa de privacidade para disponibilidade (issue #2).
+
+decision: >-
+  CONCERNS — Wave 3 do Epic 6 (Rate Limiting) APROVADA PARA MERGE com 7 concerns
+  documentados, nenhum bloqueante, e UMA precondição de merge (o pepper na Vercel, que a
+  própria story já contratava na AC9).
+
+  O QUE ESTE GATE PROVOU, E NÃO LEU NO RELATÓRIO DO @dev. O ataque foi reproduzido do zero:
+  75 chamadas curl diretas a POST /rest/v1/rpc/record_link_click com a anon key crua, contra
+  o mesmo link ativo real do gate da Wave 2, sem tocar no Next.js. Resultado: 60 aceitas, 15
+  recusadas, PRIMEIRA RECUSA NA CHAMADA #61, contagem do link de 1 → 61. A soma dos
+  sub-buckets ficou em 60 e não em 75, o que é prova de quebra de que as requisições
+  estouradas NÃO incrementam o contador (AC3, risco R4). O vetor de click inflation que o
+  gate da Wave 2 deixou em aberto está FECHADO COMO BYPASS: nenhum caminho escapa do teto.
+  Estado de development INTEGRALMENTE RESTAURADO e verificado — as 60 linhas da probe
+  removidas, todos os contadores semeados apagados, a contagem do link de volta a 1, zero
+  artefatos remanescentes.
+
+  O RISCO Nº1 DA STORY ESTÁ AFASTADO. O catálogo foi lido diretamente: existe EXATAMENTE UMA
+  public.record_link_click, assinatura (uuid, text) inalterada. Nenhuma sobrecarga órfã com
+  grant a anon e sem teto ficou publicada, e o argumento do @dev de que o `drop function` do
+  § 6.4(b) do ADR se tornou desnecessário sem a camada 3 está CORRETO e foi verificado, não
+  aceito. A camada 3 descartada pelo @pm não vazou para lugar nenhum: zero ocorrências de
+  p_app_proof, private.app_secrets ou TRACKING_APP_PROOF em código executável (só comentários
+  explicativos na migration), e o schema `private` não existe no banco.
+
+  AS TENTATIVAS DE EVASÃO FALHARAM, uma a uma. O subject do teto de tracking é derivado
+  dentro da RPC e não é escolhido pelo chamador. O pg_advisory_xact_lock serializa DE
+  VERDADE: 40 chamadas simultâneas com limite 20 produziram exatamente 20 hits. Não há burst
+  de 2x na virada (a janela é soma de sub-buckets, não contador que zera); há apenas um
+  excesso de granularidade de +16% no tracking, bounded e aceitável. O housekeeping é
+  matematicamente incapaz de apagar contador vivo — apaga o que tem mais de 24h e a janela
+  mais longa é 1h.
+
+  SOBRE O FAIL-OPEN, QUE ERA A PERGUNTA MAIS IMPORTANTE: julgo que NÃO é disparável de
+  propósito para desligar o teto de tracking, e a razão é estrutural, não circunstancial —
+  dentro de record_link_click os cinco argumentos de check_rate_limit são LITERAIS, e o único
+  valor sob controle do atacante (p_link_id) é tipado uuid e validado contra `links` antes.
+  Não existe entrada que faça o handler disparar. O gate ainda descobriu que o fail-open é
+  MENOS abrangente do que a story afirma: o bloco DECLARE fica fora do exception handler, e
+  uma chamada direta com p_bucket_seconds=0 PROPAGOU "division by zero" em vez de retornar
+  true. Isso não é explorável (nenhum caminho do produto passa parâmetro variável) mas
+  invalida a afirmação literal da AC5 e do comentário da migration — issue #3. O risco real
+  que permanece é o contratado pelo ADR: o fail-open dispara por falha genuína de
+  infraestrutura, e essas condições correlacionam com carga, ou seja, o limiter tende a
+  abrir justamente quando mais importa. Aceito como trade-off consciente, com a ressalva de
+  que a issue #1 dá ao atacante um caminho para se aproximar dessas condições.
+
+  POR QUE CONCERNS E NÃO PASS. O contrato da story foi cumprido, mas este gate encontrou um
+  vetor NOVO, introduzido por esta própria story e não coberto por AC nem por débito aceito:
+  `check_rate_limit` é `grant execute to anon` com p_bucket e p_subject inteiramente
+  controlados pelo chamador, o que a converte numa PRIMITIVA DE ESCRITA REMOTA nos
+  contadores. Provado por três probes. (a) Silenciamento de analytics: 60 chamadas anônimas
+  esgotaram o balde track_link de um link de terceiro sem gravar UM ÚNICO clique, e a
+  chamada legítima seguinte foi recusada — mais barato e mais discreto que a click inflation
+  que a story fecha, e NÃO mitigável pelo pepper, porque o subject ali é o link_id, que é
+  público por design. (b) Com o pepper vazio — que é o estado atual de .env.local e de
+  .env.example — o subject dos buckets de auth é computável: 10 requisições anônimas negaram
+  login a um IP arbitrário por 15 minutos, provado com o subject forjado do IP 203.0.113.77.
+  (c) Buckets arbitrários são aceitos, permitindo crescimento irrestrito da tabela contra o
+  NFR8. Balanço honesto: a story LIMITA a inflação de cliques e ABRE a supressão de cliques.
+  Não bloqueio o merge porque o objetivo contratado foi cumprido e provado, o impacto é de
+  disponibilidade e não de confidencialidade ou integridade, e porque o grant é EXIGIDO pela
+  AC6 — o @dev implementou o contrato com fidelidade e o defeito é de DESENHO (ADR-001 § 3).
+  Roteio a decisão para @architect/@pm exatamente como o gate da Wave 2 roteou o seu concern
+  #1, e pelo mesmo motivo: precisa ser tomada conscientemente, não por omissão.
+
+  A CONSEQUÊNCIA PRÁTICA IMEDIATA é que o gate de merge do pepper deixa de ser higiene de
+  privacidade e passa a ser controle de segurança. A story, o .env.example e o handoff
+  descrevem sua ausência como "permite correlacionar hashes de IP"; este gate demonstrou que
+  ela habilita lockout de autenticação por IP. A afirmação funcional do @dev sobre o modo
+  degradado (aviso único no log, limiter continua ativo) foi verificada e está CORRETA — o
+  que está errado é a classificação de severidade.
+
+  AS DUAS EXPECTATIVAS DE TESTE ALTERADAS SÃO FORTALECIMENTO LEGÍTIMO, não mascaramento. As
+  asserções passaram de `error === null` + `length 0` para `error !== null` + "permission
+  denied" + `data === null`: estritamente mais fortes, e um `200 []` que ANTES passava hoje
+  FALHA. A mudança é a consequência direta e pretendida do revoke que o concern #2 da Wave 2
+  recomendou. Nenhuma asserção removida, nenhum client anon trocado por service role.
+
+  A MIGRATION É SEGURA PARA O CD DE PRODUÇÃO. Preflight executado por este gate contra
+  bmyijncgsiubufwhttul: última versão aplicada 20260702120000, rate_limit_counters não existe
+  e record_link_click ainda não existe — ou seja, as Waves 2 e 3 vão juntas no mesmo run, em
+  ordem lexicográfica correta, e as dependências desta migration sobre a da Wave 2 são
+  satisfeitas dentro do próprio run. Migration atômica, sem statement destrutivo, sem DROP,
+  sem alteração de linha existente, rollback trivial e sem perda de dados.
+
+  GATES REPRODUZIDOS: typecheck exit 0, lint exit 0. A suíte completa deu 296 testes, e não
+  os 287 alegados — discrepância INVESTIGADA antes de virar achado: os 9 excedentes são de
+  tests/unit/middleware.test.ts, arquivo não-rastreado da Story 6.5 em andamento pelo @dev na
+  mesma branch. Excluindo-o, o resultado é EXATAMENTE 287 passed + 1 skipped em 40 arquivos.
+  O número do @dev está correto para o escopo da 6.4. Progressão do projeto: 192 (Epic 5) →
+  219 (Wave 1) → 233 (Wave 2) → 287 (Wave 3).
+
+next_actions:
+  - owner: "@architect / @pm"
+    action: "PRIORITÁRIO — decidir sobre a issue #1: check_rate_limit é escrita remota anônima em qualquer balde. Recomendação deste gate: allowlist de p_bucket dentro da função + limites/janelas derivados do bucket em vez de recebidos do chamador. Alternativa mais forte: revogar execute de anon e expor uma RPC por bucket. Ou aceitar formalmente como débito D10."
+  - owner: "@devops"
+    action: "BLOQUEANTE PARA O MERGE — provisionar RATE_LIMIT_PEPPER (openssl rand -hex 32, valores distintos por ambiente) em production E preview na Vercel ANTES do merge. Server-only, nunca NEXT_PUBLIC_*. Ver issue #2: a justificativa é disponibilidade, não privacidade."
+  - owner: "@devops"
+    action: "Push da branch + PR (exclusivo). Após o merge, verificação pós-deploy ÚNICA consolidando os concerns #3 da Wave 2 e #2 da Wave 1: curl em /[username] real, clique real num link e conferência no dashboard de analytics."
+  - owner: "@dev"
+    action: "Definir RATE_LIMIT_PEPPER também em .env.local — development roda hoje no modo degradado. E corrigir o texto de .env.example / Dev Notes / handoff sobre a severidade real da ausência do pepper (issue #2)."
+  - owner: "@dev"
+    action: "Issue #3 (baixa) — mover as inicializações do bloco DECLARE de check_rate_limit para dentro do `begin`, para que o fail-open seja de fato total e o comentário didático da migration descreva o código com exatidão."
+  - owner: "@po / @sm"
+    action: "Issue #4 — emendar a redação de AC1/AC17 para acomodar o bucket track_link introduzido pela Emenda 1 (subject = link_id, uuid não-PII). Correção de contrato, não defeito de implementação."
+  - owner: "@data-engineer"
+    action: "Revisão formal de DDL de check_rate_limit, ainda pendente desde a Wave 2 (concern #5). Este gate encontrou um achado nessa DDL — a revisão NÃO deve ser tratada como formalidade."
