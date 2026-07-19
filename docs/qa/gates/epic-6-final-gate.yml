@@ -1,0 +1,925 @@
+epic: EPIC-6
+title: "Segurança em Camadas & Hardening — Final Gate (sign-off do epic)"
+gate_agent: "@qa (Quinn)"
+date: "2026-07-19"
+branch: "feature/epic-6-security"
+base: main
+verdict: PASS_WITH_CONCERNS
+
+# ════════════════════════════════════════════════════════════════════════════
+# MÉTODO DESTE GATE
+# ════════════════════════════════════════════════════════════════════════════
+# Os 4 gates de wave já validaram cada parte. Este gate valida o CONJUNTO e o
+# que ninguém olhou. Nada aqui foi aceito por relatório: cada afirmação de
+# comportamento foi REPRODUZIDA contra o banco `development` real via PostgREST
+# (curl com a anon key), contra o servidor `pnpm dev` real, ou pelo build de
+# produção. O estado do banco de PRODUÇÃO foi sondado diretamente para o
+# item 9. Onde não pude observar (validação visual, smoke manual), digo que
+# não observei — não assino por procuração.
+method:
+  db_probes: "curl direto ao PostgREST (dev E prod) com a anon key — 20+ sondas"
+  runtime: "pnpm dev real + pnpm build de produção + A/B do gate de env"
+  suite: "pnpm test completo executado por este gate"
+  not_observed:
+    - "Validação visual dos 3 temas (AC7 da 6.6) — nenhum browser conectado"
+    - "Jornada pela UI real com sessão autenticada (débito recorrente das waves 2-4)"
+
+# ════════════════════════════════════════════════════════════════════════════
+# OS 8 PONTOS DO FINAL GATE (contrato: EPIC-6-EXECUTION.yaml § final_gate)
+# ════════════════════════════════════════════════════════════════════════════
+criteria:
+  - id: 1
+    check: >-
+      NFR3 — TODA tabela multi-tenant (profiles, links, link_clicks) com RLS
+      habilitada + policies que replicam e reforçam a app-layer, que permanece
+      intacta.
+    result: PASS
+    evidence:
+      catalogo_por_comportamento: >-
+        Reproduzido contra o banco development (não lido de relatório):
+        · profiles — SELECT anon 200 (público por design, requisito do signup
+          anônimo e da página ISR); INSERT anon → 42501 "new row violates
+          row-level security policy"; UPDATE anon → [] (0 linhas, filtrado
+          pela policy).
+        · links — SELECT anon de is_active=false → [] (vazio); SELECT anon de
+          ativos → 3 linhas; UPDATE anon → []; DELETE anon → [].
+        · link_clicks — SELECT/INSERT/DELETE anon → 42501 permission denied.
+        · link_click_daily — anon → 42501 permission denied for view.
+        · rate_limit_counters — anon → 42501 permission denied.
+      app_layer_intacta: >-
+        VERIFICADO NO DIFF, não assumido. `git diff main...HEAD` NÃO toca
+        lib/actions/links.ts, lib/actions/profile.ts, lib/queries/public-page.ts,
+        lib/analytics/clicks.ts nem app/dashboard/links/page.tsx. Todos os
+        filtros `.eq('profile_id', user.id)` / `.eq('id', user.id)` /
+        `.eq('is_active', true)` seguem no lugar. Os únicos arquivos de runtime
+        alterados são track-click.ts (INSERT → RPC), auth.ts (+3 chamadas de
+        throttle) e auth/callback/route.ts (validação de `next`). Nenhuma
+        remoção de autorização app-layer em lugar nenhum.
+      atomicidade: >-
+        As 3 migrations de RLS criam as policies E fazem `enable row level
+        security` no MESMO arquivo, com o ENABLE por último (decisão #5a).
+        Nenhuma janela de lockout.
+
+  - id: 2
+    check: >-
+      Débito MEDIUM do gate do Epic 5 fechado — INSERT anônimo em link_clicks
+      via PostgREST rejeitado; spam de cliques mitigado.
+    result: PASS
+    evidence:
+      insert_anonimo: >-
+        DEV: POST /rest/v1/link_clicks com a anon key →
+        HTTP 401 {"code":"42501","message":"permission denied for table
+        link_clicks"}. Duas camadas independentes: RLS sem policy de INSERT
+        E ausência de GRANT.
+      click_inflation: >-
+        REPRODUZIDO POR ESTE GATE, não herdado. 66 chamadas diretas a
+        `record_link_click` pelo PostgREST (bypass TOTAL do Next.js, sem tocar
+        na Server Action): 60 gravaram, 6 foram barradas. O teto de 60/min por
+        link vive DENTRO da RPC (camada 1), então alcança o curl direto — que
+        era exatamente o vetor que o gate da Wave 2 provou estar aberto.
+      contrato_preservado: >-
+        track-click.ts continua nunca lançando, fire-and-forget, retornando
+        ActionResult; estouro = no-op silencioso. Página pública anônima
+        carrega e renderiza os 3 links reais sob RLS (verificado em pnpm dev).
+
+  - id: 3
+    check: >-
+      FR21/NFR18 — rate limiting ativo nos 4 endpoints com os targets; falha de
+      throttle nunca quebra navegação nem vaza informação.
+    result: PASS
+    evidence:
+      targets_medidos_ao_vivo: >-
+        Cada bucket exercitado com um subject novo (openssl rand -hex 32)
+        contra check_app_rate_limit no banco dev:
+        · reset  (3/h)      → true,true,true,false,false          ✓
+        · signup (5/h)      → 5×true, depois false                ✓
+        · login  (10/15min) → 10×true, depois false               ✓
+        · track_link (60/min por link) → 60 gravados de 66        ✓
+        Os 4 targets do NFR18 batem EXATAMENTE.
+      wiring: >-
+        signUp/signIn/requestPasswordReset chamam checkRateLimit ANTES de
+        qualquer validação ou round-trip (lib/actions/auth.ts). trackLinkClick
+        chama checkRateLimit('track', linkId) antes de tocar o banco.
+      nao_vaza_informacao: >-
+        RATE_LIMIT_MESSAGE é única, genérica e idêntica exista ou não a conta —
+        não permite enumeração. Nenhum Retry-After, nenhum contador exposto.
+        `rate_limit_counters` é ilegível para anon (42501): o atacante não
+        consegue nem descobrir quanto do balde já gastou.
+      nunca_quebra: >-
+        Fail-open em DUAS camadas — `exception when others → true` dentro de
+        check_rate_limit (agora cobrindo também o bloco de atribuição, corrigido
+        na migration de hardening) e `catch → true` em lib/rate-limit.ts.
+        Estouro no tracking = no-op silencioso, navegação jamais bloqueada.
+      superficie_fechada: >-
+        A primitiva genérica `check_rate_limit` deixou de ser chamável por anon
+        (42501 confirmado). A única porta pública é `check_app_rate_limit`, com
+        allowlist de bucket (track_link → 22023 recusado, confirmado) e formato
+        de subject validado (IP em claro → 22023 recusado, confirmado). Limites
+        hardcoded no banco: o chamador escolhe QUEM é, não QUANTO pode.
+
+  - id: 4
+    check: "Middleware edge — auth guard + CSP + refresh sem regressão."
+    result: PASS
+    evidence:
+      guard: >-
+        pnpm dev real: /dashboard, /dashboard/analytics e /dashboard/links →
+        307 para /login?next=... . O layout guard NÃO foi removido
+        (app/dashboard/layout.tsx intocado no diff) — defense-in-depth de fato.
+      matcher: >-
+        Positivo e enumerado (['/dashboard/:path*']). /_next/* não é
+        interceptado (404 direto, sem redirect). / , /login, /signup, /health e
+        /[username] respondem 200 sem passar pela edge.
+      csp: >-
+        Presente em TODAS as rotas (next.config.ts headers(), não middleware),
+        em modo ENFORCE. Verificado em / e em /[username]: default-src 'self';
+        script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';
+        img-src 'self' data: blob: https:; connect-src com o domínio Supabase
+        https+wss; frame-ancestors 'none'; object-src 'none'; base-uri 'self';
+        form-action 'self'. Mais X-Frame-Options: DENY, X-Content-Type-Options:
+        nosniff, Referrer-Policy: strict-origin-when-cross-origin.
+      sem_regressao: >-
+        Página pública anônima carrega e RENDERIZA os links reais sob RLS+CSP.
+        Analytics usa createServerClient (role authenticated) → a view
+        link_click_daily com security_invoker continua legível pelo dono.
+        333 testes verdes, incluindo os de tema e de gráfico.
+    caveat: >-
+      A eficácia anti-XSS da CSP é LIMITADA e está honestamente documentada:
+      `script-src 'unsafe-inline'` sem nonce NÃO mitiga XSS. O ganho real vem
+      dos outros diretivos. É ganho líquido sobre o baseline (ausência total de
+      CSP), mas não deve ser vendido como proteção contra injeção de script.
+
+  - id: 5
+    check: >-
+      Débitos do Epic 4 fechados — contraste accent ≥ 4.5:1 + teste barrando
+      regressão + swatch alinhado.
+    result: PASS
+    evidence:
+      contraste: >-
+        --color-accent do tema accent: #d97757 → #b35536. accent-fg (#fff)
+        sobre accent = 4.92:1 (WCAG 1.4.3 para texto normal, que é o caso do
+        rótulo do Button primary). accent/bg = 3.39:1 (1.4.11, focus ring).
+        Método correto: redução de L em OKLCH com C e H constantes — croma a
+        0.2% do original, sem sacrificar identidade de marca.
+      barreira_de_ci: >-
+        tests/unit/a11y-contrast.test.ts elevou o limiar do par accent-fg/accent
+        de 3.0 → 4.5 nos 3 temas. A regressão passa a ser IMPOSSÍVEL na CI, não
+        só improvável.
+      swatch: >-
+        theme-selector.tsx: cardBg #FAF7F2 → #EDD3A9 (o canvas REAL) e
+        strip[2] → #B35536. O preview passa a mostrar a página que ele aplica.
+      propagacao_verificada: >-
+        Este gate varreu as referências: ZERO órfão de #FAF7F2 como canvas do
+        tema accent (as 7 referências apontadas pelo design gate foram
+        corrigidas) e ZERO órfão de #D97757 fora de contexto histórico. O único
+        #D97757 restante é o do logotipo (logo.html), mantido DE PROPÓSITO —
+        identidade de marca não é o mesmo problema que contraste de texto.
+        frontend-spec.md:82 agora lê `#EDD3A9` / `#B35536`.
+      stretch_ac8: >-
+        preserveAspectRatio="none" removido e h-56 → h-auto em clicks-chart.tsx:
+        o SVG escala uniformemente 3:1 sem distorção anamórfica em mobile e sem
+        letterboxing. O fix correto, não o que o gate do Epic 5 sugeriu.
+    open: >-
+      A AC7 (validação visual humana nos 3 temas) permanece ABERTA e é do owner.
+      Nem o @dev, nem o design gate, nem este gate viram os temas renderizados.
+
+  - id: 6
+    check: >-
+      Smoke test manual (docs/smoke-test.md) — item de OWNER. Escopo deste gate:
+      dizer se o roteiro precisa de ATUALIZAÇÃO por causa do Epic 6.
+    result: NEEDS_UPDATE
+    verdict: >-
+      SIM, o roteiro precisa ser atualizado ANTES da re-execução (OWN-1). Rodá-lo
+      como está validaria o MVP, não o Epic 6: os 7 passos atuais passariam
+      IDÊNTICOS com toda a segurança desligada. Um smoke que não distingue os
+      dois estados não prova nada sobre este epic.
+    required_changes:
+      - id: SMOKE-A
+        where: "§ Pré-requisitos gerais"
+        what: >-
+          Registrar RATE_LIMIT_PEPPER no .env.local. Documentar que sem ele o
+          dev sobe com fallback fixo + aviso no log (e que em produção o BUILD
+          falha). Sem esta nota, o aviso no console parece defeito.
+      - id: SMOKE-B
+        where: "§ 4 — página pública anônima"
+        what: >-
+          O check 'o link desativado NÃO aparece' deixa de ser uma asserção de
+          app-layer e passa a ser também de RLS. Explicitar que agora existem
+          DUAS barreiras e que o passo prova as duas — é o valor didático do epic.
+      - id: SMOKE-C
+        where: "NOVO passo — auth guard + CSP"
+        what: >-
+          Deslogado, abrir /dashboard, /dashboard/links e /dashboard/analytics →
+          deve redirecionar para /login. Depois, LOGADO, abrir DevTools →
+          Console e navegar por dashboard, links, analytics e /[username] nos 3
+          temas: ZERO violação de CSP. Este passo fecha, de uma vez, o débito de
+          'validação de console' que ficou aberto nas waves 2, 3 e 4.
+      - id: SMOKE-D
+        where: "NOVO passo — rate limiting"
+        what: >-
+          (a) Na tela de reset, pedir 4 vezes seguidas com o mesmo e-mail: a 4ª
+          deve exibir a mensagem GENÉRICA ('Muitas tentativas...'), sem revelar
+          contador nem mecanismo. (b) Errar a senha 11 vezes no login: a 11ª
+          exibe a MESMA mensagem genérica. (c) Confirmar que a mensagem é
+          idêntica para e-mail existente e inexistente (não enumera contas).
+          ⚠️ Fazer este passo POR ÚLTIMO — ele queima os baldes do IP do owner
+          por até 1 hora e impediria os passos 1, 2 e 7.
+      - id: SMOKE-E
+        where: "§ 2 — tema accent (fecha a AC7 da Story 6.6)"
+        what: >-
+          Checklist visual explícito no tema accent: (i) rótulo do Button
+          primary legível sobre o novo #B35536; (ii) focus ring visível ao
+          tabular sobre o canvas âmbar #EDD3A9; (iii) swatch do seletor
+          visualmente IGUAL à página que ele aplica; (iv) gráfico de analytics
+          sem distorção em largura de mobile. Sem esta passada humana a AC7 não
+          fecha — nenhum agente pode assiná-la.
+      - id: SMOKE-F
+        where: "§ 5 — cliques"
+        what: >-
+          Nota: o tracking agora grava via RPC e tem teto de 60/min por link.
+          Um smoke normal (2 cliques) não o alcança; a nota existe para que um
+          teste de carga futuro não interprete o teto como bug.
+
+  - id: 7
+    check: >-
+      pnpm dev sobe; CI verde (typecheck+lint+test+build); migrations
+      versionadas para o CD; conventional commits [Story 6.x].
+    result: PASS
+    evidence:
+      typecheck: "PASS — tsc --noEmit limpo."
+      lint: "PASS — eslint sem saída."
+      test: "PASS — 43 arquivos, 333 testes passando, 1 skipado (34s). Executado por este gate."
+      build: "PASS — next build de produção exit 0, 14 rotas."
+      dev: "PASS — pnpm dev pronto em 151ms; 8 rotas sondadas com os códigos esperados."
+      migrations: >-
+        5 migrations versionadas em supabase/migrations/, ordenadas por
+        timestamp, aplicadas em development. O CD `migrate-production` as aplica
+        no merge da main. Nenhum passo manual em prod.
+      commits: >-
+        37 commits, 100% conventional (feat/fix/docs/chore/test/refactor), todos
+        com [Story 6.x] ou [EPIC-6]. Zero fora do padrão.
+    caveat: >-
+      O 'CI verde' é condicional: o job `quality` agora tem um passo Preflight e
+      um Build que exigem `secrets.RATE_LIMIT_PEPPER`. Sem o secret provisionado
+      no GitHub, a CI fica VERMELHA e — porque `migrate-production` tem
+      `needs: quality` — as migrations NÃO são aplicadas. Ver merge_preconditions.
+
+  - id: 8
+    check: ".env.example atualizado; nenhuma secret em código ou NEXT_PUBLIC_*."
+    result: PASS_WITH_CONCERNS
+    evidence:
+      env_example: >-
+        Documenta RATE_LIMIT_PEPPER com propósito, geração (openssl rand -hex
+        32), escopo server-only e o gate de merge. Documenta também que
+        SUPABASE_SERVICE_ROLE_KEY NÃO é usada pelo app (o ADR-001 refutou o
+        admin client) e que o PRE-3 do epic está CANCELADO.
+      varredura: >-
+        Grep em lib/, app/, components/, middleware.ts e next.config.ts: os
+        ÚNICOS NEXT_PUBLIC_* consumidos são SUPABASE_URL e SUPABASE_ANON_KEY,
+        ambos públicos por definição. RATE_LIMIT_PEPPER só aparece como
+        process.env server-side em lib/rate-limit.ts e como nome no gate de
+        next.config.ts. Nenhuma secret literal em código.
+      service_role: "Ausente do runtime. Só em tests/integration/helpers/admin.ts."
+    concern: >-
+      .env.example ainda carrega a afirmação FALSA que o gate da Wave 4 refutou:
+      'production → lib/rate-limit.ts LANÇA na carga do módulo e o app NÃO SOBE
+      ... quebra ruidosamente no boot'. Isso foi TESTADO e é falso — o throw só
+      dispara na primeira Server Action. lib/rate-limit.ts e next.config.ts já
+      foram corrigidos; .env.example ficou para trás. Num projeto didático, um
+      comentário que descreve algo que o código não faz ensina a coisa errada —
+      é o mesmo defeito que a Wave 4 mandou corrigir, sobrevivendo num arquivo.
+      Ver issue #1.
+
+# ════════════════════════════════════════════════════════════════════════════
+# ALÉM DOS 8 — VERIFICAÇÕES DE CONJUNTO (o que nenhuma wave olhou)
+# ════════════════════════════════════════════════════════════════════════════
+holistic_verification:
+
+  - id: 9
+    topic: "Ordem de aplicação das migrations em PRODUÇÃO"
+    result: PASS
+    method: >-
+      Sondei o banco de PRODUÇÃO diretamente (anon key de .env.prod.local) para
+      estabelecer o baseline real, em vez de supor.
+    production_baseline_measured:
+      link_clicks_insert_anon: >-
+        HTTP 409 com erro de FOREIGN KEY — ou seja, a requisição PASSOU pela
+        camada de permissão e só parou na integridade referencial. CONFIRMADO:
+        a RLS de link_clicks NÃO está em produção hoje, e o débito MEDIUM do
+        Epic 5 está VIVO em prod neste momento.
+      link_clicks_select_anon: "HTTP 200 — anon lê a tabela de cliques hoje."
+      record_link_click: "HTTP 404 — não existe."
+      check_app_rate_limit: "HTTP 404 — não existe."
+      volume: "link_clicks = 0 linhas. profiles = 1 linha."
+    dependency_chain_analysis: >-
+      Simulação da aplicação sequencial das 5 migrations num banco limpo de
+      Epic 6:
+      1. 170252_profiles_rls — autocontida. Depende só de public.profiles
+         (Epic 2). O INSERT continua funcionando porque o único caminho é o
+         trigger handle_new_user (SECURITY DEFINER, owner postgres, BYPASSRLS).
+      2. 171040_links_rls — autocontida. Depende de public.links (Epic 3).
+      3. 180000_link_clicks_rls — depende da VIEW link_click_daily existir
+         (criada em 20260702120000, Epic 5, JÁ EM PRODUÇÃO — verificado). O
+         `alter view ... set (security_invoker = on)` falharia se a view não
+         existisse. Dependência SATISFEITA.
+      4. 190000_rate_limit — cria rate_limit_counters e check_rate_limit, e
+         substitui record_link_click (criada em 180000, MESMA assinatura →
+         `create or replace` troca o corpo, não cria sobrecarga). Ordem
+         lexicográfica dos timestamps garante 180000 antes de 190000. OK.
+      5. 200000_rate_limit_hardening — substitui check_rate_limit e REVOGA seu
+         EXECUTE de anon/authenticated. ⚠️ Ponto que exigia verificação:
+         record_link_click (de 190000) CHAMA check_rate_limit internamente.
+         Como record_link_click é SECURITY DEFINER com owner postgres, ela roda
+         com os privilégios do owner e o revoke não a afeta.
+         NÃO ACEITEI ISSO POR RACIOCÍNIO: reproduzi em dev, onde as 5
+         migrations já estão aplicadas — as 66 chamadas a record_link_click
+         funcionaram (60 gravaram, 6 barradas pelo teto). A cadeia interna
+         está PROVADA no estado final.
+      Nenhuma migration depende de estado criado por outra fora desta ordem.
+      Nenhuma é destrutiva. Nenhuma faz backfill nem altera dado existente.
+    real_data_risk: >-
+      NEGLIGENCIÁVEL, e isso é MEDIDO, não presumido: produção tem 1 profile e
+      ZERO link_clicks. Não há volume para degradar plano de query, não há
+      linha que possa violar uma policy nova, não há backfill. O cenário de
+      "migration que quebra com dados reais" não se materializa aqui.
+    production_downtime_window: >-
+      NÃO HÁ janela de indisponibilidade. Há uma janela de DEGRADAÇÃO PARCIAL,
+      e ela existe nas duas ordens possíveis (o CD do Supabase e o deploy da
+      Vercel são processos independentes e não ordenados entre si):
+      · migrations ANTES do deploy → o código ANTIGO faz INSERT direto em
+        link_clicks e passa a receber 42501. Como o tracking é fire-and-forget
+        e nunca lança, o efeito é PERDA SILENCIOSA DE CLIQUES na janela.
+        Navegação, página pública, login e dashboard: intactos.
+      · deploy ANTES das migrations → o código NOVO chama record_link_click
+        (404) e check_app_rate_limit (404). Ambos degradam para no-op /
+        fail-open. Efeito: mesma perda silenciosa de cliques, rate limiting
+        temporariamente inativo. Auth e navegação: intactos.
+      Em AMBAS as ordens a única vítima é o tracking, e com prod em 0 cliques o
+      impacto real é nulo. Esta é a issue #3 do gate da Wave 2, que permanece
+      aberta — mas este gate a MEDE e a reclassifica de risco para não-evento.
+
+  - id: 10
+    topic: "Interação entre camadas (rate limiting × RLS × middleware)"
+    result: PASS
+    findings:
+      middleware_nao_consome_rate_limit: >-
+        HIPÓTESE TESTADA E REFUTADA. O middleware não importa lib/rate-limit
+        (verificado no arquivo) e o refresh de token fala com o GoTrue, não com
+        o PostgREST — não passa por check_app_rate_limit. Além disso, o matcher
+        é /dashboard/:path*, enquanto os buckets de auth são consumidos em
+        /login, /signup e /reset-password, fora do matcher. NÃO há caminho pelo
+        qual o refresh do middleware gaste o balde de login do usuário.
+      rls_x_rate_limit: >-
+        A tabela rate_limit_counters tem RLS ligada SEM policy e sem grants —
+        ou seja, ela só é acessível pelo owner via SECURITY DEFINER. Este é o
+        acoplamento mais frágil do epic: se o owner das funções não tivesse
+        BYPASSRLS, TODA escrita de contador falharia, o `exception when others`
+        engoliria, e o rate limiting inteiro ficaria SILENCIOSAMENTE DESLIGADO
+        com todos os sinais verdes. Verifiquei empiricamente em dev que não é o
+        caso (os 4 buckets contam corretamente). Em prod, as migrations são
+        aplicadas pelo mesmo papel (`supabase db push` como postgres), então o
+        resultado deve ser idêntico — mas isso é uma PREDIÇÃO, não uma
+        observação. Ver merge_preconditions PRE-M7 (verificação pós-deploy).
+      rls_x_middleware: >-
+        O middleware roda getUser() com a anon key e cookies; a role resultante
+        no PostgREST é `authenticated`, que é a role que todas as policies de
+        escrita usam. Sem conflito. A view link_click_daily com
+        security_invoker exige SELECT na tabela BASE para `authenticated` —
+        preservado de propósito na migration de hardening (revogado só de anon).
+        Se isso tivesse sido revogado por simetria, o analytics quebraria: é o
+        tipo de acoplamento que só aparece olhando as três camadas juntas, e
+        está corretamente resolvido.
+      csp_x_supabase: >-
+        connect-src é montado com NEXT_PUBLIC_SUPABASE_URL lido em
+        next.config.ts, ou seja EM TEMPO DE BUILD. Se o env estiver ausente no
+        BUILD (mesmo que presente em runtime), a CSP sai com connect-src
+        'self' apenas e TODA chamada do browser ao Supabase é bloqueada — login
+        pelo browser quebra com erro de CSP no console e nenhum erro de
+        servidor. É uma dependência de build NOVA, criada por este epic, que
+        não existia antes. Ver merge_preconditions PRE-M4.
+      server_action_sob_middleware: >-
+        Server Actions do dashboard são POSTs para /dashboard/* e portanto
+        ATRAVESSAM o middleware, que roda getUser() antes de cada uma. Efeito:
+        um round-trip extra ao GoTrue por action. Não é bug e não consome rate
+        limit, mas é custo de latência e de invocação edge que ninguém
+        contabilizou. Registrado como issue #4 (low).
+
+  - id: 11
+    topic: "Regressão ponta a ponta"
+    result: PASS
+    suite: "43 arquivos · 333 testes passando · 1 skipado · 34.25s"
+    baseline_comparison: >-
+      Epic 5 fechou com 192 testes. O Epic 6 adiciona +141 (rate-limit unit e
+      integração, 3 suítes de RLS, middleware, auth-callback-next,
+      auth-rate-limit). Crescimento de 73% na suíte.
+    manual_flows_with_dev_server:
+      publica_anonima: >-
+        GET /alessandrovarela → 200 e RENDERIZA os 3 links reais
+        (substack, instagram, youtube). RLS não quebrou a leitura pública.
+      tracking: >-
+        record_link_click grava (60/66 no teste de teto). Contrato
+        fire-and-forget preservado.
+      dashboard: >-
+        /dashboard, /dashboard/links, /dashboard/analytics → 307 /login?next=…
+        (correto: sem sessão). Com sessão não foi testado por este gate — ver
+        not_observed.
+      auth_pages: "/login 200 · /signup 200 · /health 200 · / 307 → /login"
+      open_redirect: >-
+        /auth/callback?next=/%5Cevil.com, //evil.com e /dashboard → todos
+        terminam em /auth/confirm-failed. O vetor do backslash (issue #6 da
+        Wave 4) está FECHADO — reproduzido por este gate.
+    caveat: >-
+      Não foi executada uma jornada com SESSÃO AUTENTICADA pela UI real
+      (criar link, reordenar, desativar, ver analytics). É o débito recorrente
+      das waves 2, 3 e 4 e transfere-se ao smoke do owner (SMOKE-C/SMOKE-E).
+
+  - id: 12
+    topic: "Precondições de merge — ver seção merge_preconditions"
+    result: SEE_SECTION
+
+# ════════════════════════════════════════════════════════════════════════════
+# PRECONDIÇÕES DE MERGE — @devops (EXAUSTIVO)
+# Um item esquecido aqui derruba produção ou trava o CD.
+# ════════════════════════════════════════════════════════════════════════════
+merge_preconditions:
+
+  - id: PRE-M1
+    severity: BLOCKING
+    owner: "@devops"
+    what: "RATE_LIMIT_PEPPER como secret de REPOSITÓRIO no GitHub Actions"
+    why: >-
+      O job `quality` do ci.yml ganhou um passo Preflight e um Build que leem
+      `secrets.RATE_LIMIT_PEPPER`. Sem ele o job FALHA. E como
+      `migrate-production` declara `needs: quality`, a falha impede que as
+      migrations sejam aplicadas em produção — a branch mergeia e o banco não
+      muda, deixando código novo contra schema velho.
+    critical_detail: >-
+      ⚠️ TEM QUE SER SECRET DE REPOSITÓRIO, NÃO DE ENVIRONMENT. O job `quality`
+      NÃO declara `environment:` (só `migrate-production` declara
+      `environment: production`). Um secret criado apenas no environment
+      `production` fica INVISÍVEL para o `quality` e a CI falha mesmo com o
+      secret aparentemente provisionado. Este é o erro mais provável de todo o
+      merge.
+    how: "gh secret set RATE_LIMIT_PEPPER --body \"$(openssl rand -hex 32)\""
+
+  - id: PRE-M2
+    severity: BLOCKING
+    owner: "@devops"
+    what: "RATE_LIMIT_PEPPER na Vercel — environment PRODUCTION"
+    why: >-
+      assertProductionEnv() em next.config.ts roda ANTES da compilação e faz o
+      build da Vercel FALHAR sem o env. Sem deploy, sem release.
+    how: "Vercel → Settings → Environment Variables → Production. NUNCA prefixar NEXT_PUBLIC_."
+
+  - id: PRE-M3
+    severity: BLOCKING
+    owner: "@devops"
+    what: "RATE_LIMIT_PEPPER na Vercel — environment PREVIEW"
+    why: >-
+      Os preview deploys de PRs também rodam `next build` com NODE_ENV=production
+      e batem no mesmo gate. Sem o env em Preview, TODO PR futuro tem o deploy
+      de preview vermelho. Valor DIFERENTE do de produção.
+
+  - id: PRE-M4
+    severity: BLOCKING
+    owner: "@devops"
+    what: "Confirmar NEXT_PUBLIC_SUPABASE_URL disponível em TEMPO DE BUILD na Vercel (prod + preview)"
+    why: >-
+      DEPENDÊNCIA NOVA CRIADA POR ESTE EPIC. A CSP é montada em next.config.ts,
+      avaliado no build. Se a var existir só em runtime, o header sai com
+      `connect-src 'self'` e o browser bloqueia TODA chamada ao Supabase —
+      login quebra pelo console, sem nenhum erro de servidor. Antes do Epic 6
+      esta var só era necessária em runtime; agora é de build.
+    how: "Verificar o header Content-Security-Policy do deploy e confirmar que o domínio Supabase aparece em connect-src."
+
+  - id: PRE-M5
+    severity: BLOCKING
+    owner: "@devops"
+    what: "Confirmar os secrets do CD já existentes antes do merge"
+    why: >-
+      `migrate-production` depende de SUPABASE_ACCESS_TOKEN,
+      SUPABASE_DB_PASSWORD e SUPABASE_PROJECT_REF_PROD. Já foram usados nos
+      Epics 3-5, mas este é o maior lote de migrations do projeto (5 de uma vez,
+      3 delas mudando comportamento de acesso). Um token expirado significa
+      código novo em produção contra schema antigo — o pior dos dois mundos.
+    how: "Rodar o CD uma vez em dry-run ou confirmar validade dos tokens antes do merge."
+
+  - id: PRE-M6
+    severity: BLOCKING
+    owner: "@devops"
+    what: "Secrets de teste de integração da CI"
+    why: >-
+      SUPABASE_URL_DEV, SUPABASE_ANON_KEY_DEV e SUPABASE_SERVICE_ROLE_KEY_DEV
+      alimentam `pnpm test:integration` no job quality. As novas suítes de RLS e
+      rate limiting EXIGEM o banco dev COM as migrations do Epic 6 aplicadas
+      (já estão). Se o CI apontar para um Supabase sem elas, ~40 testes falham
+      e a CI fica vermelha por motivo errado.
+
+  - id: PRE-M7
+    severity: HIGH
+    owner: "@devops"
+    what: "Verificação PÓS-DEPLOY em produção (não é opcional)"
+    why: >-
+      Duas afirmações centrais do epic são PREDIÇÕES sobre produção, não
+      observações: (a) que o owner das funções SECURITY DEFINER tem BYPASSRLS em
+      prod — se não tiver, o rate limiting fica silenciosamente desligado com
+      todos os sinais verdes; (b) que a RLS não quebrou nenhuma query real.
+    checklist_minimo_pos_merge:
+      - "POST /rest/v1/link_clicks com a anon key de PROD → deve retornar 42501 (hoje retorna 409/FK)."
+      - "POST /rest/v1/rpc/check_rate_limit com a anon key de PROD → deve retornar 42501."
+      - "POST /rest/v1/rpc/check_app_rate_limit com bucket 'track_link' → deve retornar 22023."
+      - "GET /rest/v1/rate_limit_counters com a anon key de PROD → deve retornar 42501."
+      - "Abrir a página pública real e confirmar que os links continuam renderizando."
+      - "Clicar num link e confirmar no dashboard de analytics que o clique foi CONTADO (prova que record_link_click e o BYPASSRLS do owner funcionam em prod)."
+      - "Fazer 4 pedidos de reset seguidos e confirmar a mensagem genérica (prova que os contadores gravam em prod)."
+
+  - id: PRE-M8
+    severity: MEDIUM
+    owner: "@devops"
+    what: "Ordem recomendada: aplicar migrations ANTES de promover o deploy"
+    why: >-
+      Das duas ordens possíveis, migrations-primeiro degrada apenas o tracking
+      do código antigo (perda silenciosa de cliques); deploy-primeiro degrada o
+      tracking E deixa o rate limiting inativo. Com prod em 0 cliques, ambas são
+      aceitáveis, mas a primeira é estritamente melhor.
+
+  - id: PRE-M9
+    severity: MEDIUM
+    owner: "@devops"
+    what: "Tag v0.1.0 na main ANTES do merge do Epic 6 (OWN-3)"
+    why: >-
+      A tag marca o MVP (Epics 1-5). O Epic 6 é pós-MVP, candidato a v0.2.0.
+      Mergear antes de taggear perde para sempre o ponto de corte do MVP —
+      irreversível sem reescrever histórico.
+
+  - id: PRE-M10
+    severity: LOW
+    owner: "@devops"
+    what: "Documentar o pepper no gerenciador de segredos do owner"
+    why: >-
+      Perder o pepper não causa perda de dado, mas INVALIDA todos os baldes em
+      voo (todo mundo ganha limite zerado) e obriga a reprovisionar em 3 lugares
+      (GitHub, Vercel prod, Vercel preview) simultaneamente.
+
+# ════════════════════════════════════════════════════════════════════════════
+# ISSUES DESTE GATE (novas, não herdadas)
+# ════════════════════════════════════════════════════════════════════════════
+issues:
+  - id: 1
+    severity: low
+    category: docs/consistency
+    status: open
+    title: ".env.example ainda afirma que o app 'NÃO SOBE' sem o pepper — falso desde a Wave 4"
+    description: >-
+      O bloco 'COMPORTAMENTO SE AUSENTE' do .env.example diz: 'production →
+      lib/rate-limit.ts LANÇA na carga do módulo e o app NÃO SOBE ... quebra
+      ruidosamente no boot'. O gate da Wave 4 TESTOU e refutou: o throw só
+      dispara na primeira Server Action. lib/rate-limit.ts e next.config.ts
+      foram corrigidos com essa lição escrita em detalhe; .env.example não. Num
+      projeto didático é exatamente o defeito que a Wave 4 mandou corrigir,
+      sobrevivendo num arquivo que o leitor abre PRIMEIRO.
+    recommendation: >-
+      Reescrever o bloco para: 'production → o BUILD falha (assertProductionEnv
+      em next.config.ts), então o artefato ruim nunca existe. O throw em
+      lib/rate-limit.ts é backstop e dispara na primeira Server Action, não no
+      boot.' Correção de 4 linhas.
+    blocking: false
+
+  - id: 2
+    severity: low
+    category: infra
+    status: open
+    title: "Next 16.2.6 deprecia `middleware.ts` em favor de `proxy.ts`"
+    description: >-
+      Confirmado por este gate em DOIS pontos: `next build` e `next dev` emitem
+      '⚠ The \"middleware\" file convention is deprecated. Please use \"proxy\"
+      instead.' O middleware FUNCIONA (build classifica como 'ƒ Proxy
+      (Middleware)' e o guard redireciona corretamente), mas o projeto nasce
+      sobre uma convenção anunciada como morta.
+    recommendation: >-
+      Renomear middleware.ts → proxy.ts numa story de manutenção, junto com a
+      atualização de docs/architecture/routing.md e do teste de matcher. Não
+      fazer no Epic 6: renomear no fechamento de um epic de segurança é
+      trocar o telhado durante a mudança.
+    blocking: false
+
+  - id: 3
+    severity: low
+    category: code/dead-code
+    status: open
+    title: "O `?next=` construído pelo middleware é parâmetro MORTO"
+    description: >-
+      O middleware faz `url.searchParams.set('next', request.nextUrl.pathname)`
+      no redirect para /login. Grep confirma que NENHUM consumidor lê esse
+      parâmetro: a única ocorrência de `next=` no fluxo de auth é
+      `${origin}/auth/callback?next=/reset-password/confirm` em
+      lib/actions/auth.ts:130, que é outro fluxo. O usuário que tentava abrir
+      /dashboard/analytics loga e cai em /dashboard, não no destino.
+    recommendation: >-
+      Ou implementar o consumo em /login (redirect pós-login para o `next`
+      validado — reusar safeNextPath de auth/callback/route.ts, que já existe e
+      já é robusto), ou remover o parâmetro. Manter os dois estados é pior que
+      qualquer um dos dois: parece funcionalidade e não é. Herdado da issue #4
+      do gate da Wave 4, confirmado independentemente aqui.
+    blocking: false
+
+  - id: 4
+    severity: low
+    category: performance
+    status: open
+    title: "Server Actions do dashboard atravessam o middleware — um getUser() extra por action"
+    description: >-
+      Achado NOVO, de conjunto — nenhuma wave olhou isto. Server Actions do
+      dashboard são POSTs para /dashboard/*, portanto casam o matcher
+      /dashboard/:path* e disparam supabase.auth.getUser() ANTES da action, que
+      por sua vez faz seu próprio getUser(). Toda criação/edição/reordenação de
+      link paga um round-trip extra ao GoTrue e uma invocação edge.
+    recommendation: >-
+      Medir antes de agir. Se o custo importar, o matcher pode ser restrito a
+      requisições GET/de navegação, ou o guard de layout pode absorver o papel
+      (ele já é autoritativo). Não mexer sem medição — o ganho de segurança da
+      redundância é real.
+    blocking: false
+
+  - id: 5
+    severity: info
+    category: security/limits
+    status: accepted
+    title: "O teto de 60/min por link é global — um link genuinamente viral perde cliques"
+    description: >-
+      A camada 1 (dentro da RPC) limita 60 cliques/min POR LINK para TODOS os
+      chamadores, sem distinguir tráfego legítimo de forjado. Um link que
+      viralize acima de 1 clique/segundo terá o excedente descartado
+      silenciosamente e o analytics subcontará.
+    recommendation: >-
+      Sem ação. É o preço explícito de fechar o click inflation no único lugar
+      que alcança o curl direto, e está contratado no ADR-001 § 6. Registrado
+      para que uma subcontagem futura não seja diagnosticada como bug.
+    blocking: false
+
+# ════════════════════════════════════════════════════════════════════════════
+# DÉBITOS ABERTOS CONSOLIDADOS — as 4 waves + este gate, lista única
+# Para o OWNER decidir. Nada aqui bloqueia o merge isoladamente.
+# ════════════════════════════════════════════════════════════════════════════
+consolidated_open_debts:
+
+  human_dependent:
+    - id: HD-1
+      severity: medium
+      title: "AC7 da Story 6.6 — validação visual dos 3 temas NUNCA foi executada"
+      origin: "design gate Wave 4, issue #4"
+      detail: >-
+        Nem o @dev (extensão Chrome desconectada), nem o design gate (nenhum
+        browser), nem este gate viram os temas renderizados. Toda a análise de
+        contraste é ANALÍTICA. Contraste não é a única dimensão visual.
+      blocks: "Declarar a Story 6.6 como Done"
+      action: "Owner — SMOKE-E do roteiro atualizado"
+
+    - id: HD-2
+      severity: medium
+      title: "Smoke test manual pós-Epic 6 (OWN-1) não executado — e o roteiro está desatualizado"
+      origin: "EPIC-6-EXECUTION owner_prerequisites + este gate, critério 6"
+      detail: >-
+        O roteiro atual passaria idêntico com toda a segurança desligada.
+        Precisa das 6 atualizações SMOKE-A..F antes de ser re-executado.
+      blocks: "mvp-declaration + sign-off operacional do Epic 6"
+      action: "Atualizar docs/smoke-test.md, depois owner executa"
+
+    - id: HD-3
+      severity: low
+      title: "Jornada pela UI real com sessão autenticada — débito recorrente"
+      origin: "gates das Waves 2, 3 e 4 (aceito 3 vezes) + este gate"
+      detail: >-
+        Nenhum gate do epic exercitou o dashboard logado pela interface. Toda a
+        validação de dashboard é por teste e por código de status HTTP.
+      action: "Absorvido pelo SMOKE-C/SMOKE-E — uma sessão de ~10 min fecha HD-1, HD-3 e o débito de console das 3 waves"
+
+    - id: HD-4
+      severity: low
+      title: "3 reproduções externas do setup local (OWN-2)"
+      origin: "Story 5.6 AC4"
+      blocks: "mvp-declaration"
+
+    - id: HD-5
+      severity: low
+      title: "Retrospectiva do Epic 5 (OWN-4) nunca escrita"
+      origin: "EPIC-6-EXECUTION owner_prerequisites"
+      detail: "Epics 1, 3 e 4 têm retro; o 5 não. É pré-requisito da retro do Epic 6."
+
+  technical:
+    - id: TD-1
+      severity: medium
+      title: "DEBT-001 — /[username] declara revalidate=60 mas responde no-store; o ISR do NFR1 nunca existiu"
+      origin: "gate Wave 4, issue #3 (verificado por A/B físico)"
+      status: "Registrado em docs/architecture/technical-debt.md, dono @architect"
+      detail: >-
+        PRÉ-EXISTENTE ao Epic 6 — provado por A/B removendo middleware.ts e
+        next.config.ts. Toda visita anônima paga render completo + round-trip ao
+        Supabase. Sem impacto de segurança; impacto de custo e de NFR8.
+        Provavelmente EXPLICA por que o concern #2 da Wave 1 (verificação de ISR
+        em produção) nunca fechou: não havia ISR para verificar.
+      action: "@architect — investigar causa-raiz e então cumprir a NFR1 ou renegociá-la formalmente."
+
+    - id: TD-2
+      severity: medium
+      title: "CSP com script-src 'unsafe-inline' e sem nonce NÃO mitiga XSS"
+      origin: "gate Wave 4, issue #2 (justificativa corrigida no commit d52d9a6)"
+      status: "Documentação corrigida; a LIMITAÇÃO permanece por escolha"
+      detail: >-
+        Nonce-via-middleware é padrão de primeira classe do Next e era viável.
+        Optou-se por fonte única estática de headers. O argumento 'nonce
+        quebraria o cache' caiu junto com TD-1 (as duas superfícies já são
+        dinâmicas), então o tradeoff mudou de forma.
+      action: "Reavaliar quando TD-1 for resolvido — o custo de adotar nonce hoje é menor do que se acreditava."
+
+    - id: TD-3
+      severity: low
+      title: "AC11 da Story 6.3 — revisão de DDL pelo @data-engineer nunca executada"
+      origin: "gate Wave 2, issue #5 — ainda aberta na Wave 3"
+      detail: >-
+        A DDL de link_clicks (policies + RPC SECURITY DEFINER + hardening da
+        view) foi escrita pelo @dev e revisada pelo @qa, mas não pelo
+        especialista que a AC nomeia. As Waves 1 e 2 tiveram gate_agent
+        diferente (@data-engineer vs @qa) e o item caiu no vão.
+      action: "@data-engineer — revisão pós-merge; nenhum defeito encontrado até agora sugere urgência."
+
+    - id: TD-4
+      severity: low
+      title: "Janela não-ordenada entre a migration de produção e o deploy da Vercel"
+      origin: "gate Wave 2, issue #3 — ainda aberta na Wave 3"
+      status: "MEDIDO E REDIMENSIONADO por este gate (item 9)"
+      detail: >-
+        Real, mas com prod em 0 link_clicks o impacto é nulo. Degradação
+        limitada ao tracking em ambas as ordens. Vira problema de verdade
+        quando prod tiver volume de cliques.
+      action: "PRE-M8 mitiga por ordenação. Revisitar antes do primeiro epic que mude schema com volume real."
+
+    - id: TD-5
+      severity: low
+      title: "Bucket track_link usa uuid como subject, não digest 64-hex (AC1/AC17 da 6.4)"
+      origin: "gate Wave 3, issue #4"
+      detail: >-
+        As ACs exigem subject 64-hex em TODAS as linhas de rate_limit_counters.
+        O balde por link grava o link_id (uuid). Não é violação de NFR19 — uuid
+        de link não é PII —, mas é divergência literal da AC.
+      action: "Reconciliar o texto da AC com a realidade, ou hashear o uuid. Preferir o primeiro: a AC é que está errada."
+
+    - id: TD-6
+      severity: low
+      title: "Next 16.2.6 deprecia middleware.ts em favor de proxy.ts"
+      origin: "gate Wave 4 issue #5 + confirmado por este gate (issue #2)"
+      action: "Story de manutenção pós-merge."
+
+    - id: TD-7
+      severity: low
+      title: "`?next=` do middleware é parâmetro morto"
+      origin: "gate Wave 4 issue #4 + confirmado por este gate (issue #3)"
+      action: "Implementar o consumo em /login (safeNextPath já existe) ou remover."
+
+    - id: TD-8
+      severity: low
+      title: ".env.example descreve comportamento de fail-fast já refutado"
+      origin: "este gate, issue #1"
+      action: "Correção de 4 linhas — barata, faz antes do merge se houver apetite."
+
+    - id: TD-9
+      severity: low
+      title: "Server Actions do dashboard pagam um getUser() extra pelo middleware"
+      origin: "este gate, issue #4"
+      action: "Medir antes de agir."
+
+    - id: TD-10
+      severity: low
+      title: "Migrations antigas sem IF NOT EXISTS"
+      origin: "gate Epic 5, concern info"
+      status: "NÃO-ESCOPO declarado do Epic 6 (decisão #6)"
+      action: "Nenhuma. Tracking do Supabase garante execução única."
+
+  accepted_by_design:
+    - id: AD-1
+      title: "profiles_select_public USING (true) permite enumerar usernames"
+      detail: >-
+        Analisado a fundo pelo gate da Wave 1: profiles não tem e-mail,
+        telefone, hash nem token. A leitura anônima é REQUISITO do signup
+        (checagem de username duplicado roda como role anon) e da página
+        pública. Restringir quebraria o cadastro SILENCIOSAMENTE.
+      status: "Aceito — decisão correta e bem argumentada."
+
+    - id: AD-2
+      title: "Fail-open do rate limiting"
+      detail: >-
+        Um limiter quebrado libera em vez de bloquear. Trade-off explícito de
+        disponibilidade sobre throttle, contratado no ADR-001 § 3/§ 4 e nas
+        AC5/AC14. Não tratar como defeito.
+      status: "Aceito."
+
+    - id: AD-3
+      title: "Granularidade dos sub-buckets permite excesso limitado sobre o teto nominal"
+      origin: "gate Wave 3, issue #5 (info)"
+      status: "Aceito — a troca precisão/volume de linhas está bem calibrada."
+
+    - id: AD-4
+      title: "Logotipo mantém o accent antigo #D97757"
+      detail: "Identidade de marca não é o mesmo problema que contraste de texto. Decisão correta."
+      status: "Aceito."
+
+    - id: AD-5
+      title: "Teto de 60/min por link é global (issue #5 deste gate)"
+      status: "Aceito — preço de fechar o click inflation."
+
+# ════════════════════════════════════════════════════════════════════════════
+# CONFORMIDADE ARQUITETURAL
+# ════════════════════════════════════════════════════════════════════════════
+architectural_conformance:
+  nfr3_rls_all_multitenant_tables: true    # profiles, links, link_clicks — verificado por sonda
+  app_layer_authz_preserved: true          # nenhum filtro removido — verificado no diff
+  nfr18_all_four_targets: true             # 3/h, 5/h, 10/15min, 60/min — medidos ao vivo
+  nfr19_no_raw_ip_persisted: true          # só digest 64-hex; invariante imposta pelo BANCO
+  nfr4_security_headers: true              # CSP enforce + XFO + nosniff + Referrer-Policy
+  no_service_role_in_app_runtime: true     # ADR-001 refutou o admin client; PRE-3 cancelado
+  zero_new_dependencies: true              # node:crypto + next/headers; nenhum Upstash/KV
+  security_definer_controls: true          # search_path fixo + revoke public + grant mínimo, nas 3 funções
+  migrations_atomic_policies_then_enable: true
+  conventional_commits: true               # 37/37
+  article_iv_no_invention: true            # tudo rastreia a FR21/NFR3/NFR18/NFR19/ACs
+
+gates_run:
+  typecheck: "PASS"
+  lint: "PASS"
+  test: "PASS — 333 passed | 1 skipped (43 arquivos)"
+  build: "PASS — next build exit 0"
+  dev_server: "PASS — ready em 151ms, 8 rotas sondadas"
+  env_gate_ab: "PASS — assertProductionEnv lança com NODE_ENV=production e pepper ausente"
+  db_probes_dev: "PASS — 20+ sondas ao PostgREST"
+  db_probes_prod: "EXECUTADO — baseline pré-merge estabelecido"
+  visual: "NOT RUN — nenhum browser conectado (HD-1)"
+  ui_journey: "NOT RUN — sem sessão autenticada (HD-3)"
+
+# ════════════════════════════════════════════════════════════════════════════
+decision: >-
+  PASS_WITH_CONCERNS — o Epic 6 está APROVADO para merge, condicionado às 6
+  precondições BLOCKING de provisionamento (PRE-M1..PRE-M6), que são de
+  @devops e não de código.
+
+  O epic entrega o que prometeu, e entrega verificadamente. Os dois débitos
+  nominais que ele veio fechar estão FECHADOS e eu os reproduzi, não os aceitei
+  de relatório: o INSERT anônimo em link_clicks retorna 42501 em dev (e ainda
+  passa em prod hoje — sonda feita, o débito está VIVO lá até o merge), e o
+  click inflation por curl direto foi barrado exatamente no 61º de 66 disparos.
+  Os 4 targets do NFR18 batem ao número. As 3 tabelas multi-tenant têm RLS
+  efetiva e a app-layer não perdeu uma única linha de autorização — verifiquei
+  no diff, não na descrição. O contraste do accent foi corrigido pelo método
+  certo (OKLCH, croma preservado) e blindado na CI.
+
+  O que me impede de assinar PASS puro são três coisas, nenhuma delas defeito
+  de implementação:
+
+  (1) DUAS ACEITAÇÕES DEPENDEM DE OLHOS HUMANOS E NINGUÉM AS FEZ. A AC7 da 6.6
+  exige ver os 3 temas renderizados; três agentes em sequência declararam
+  honestamente que não conseguiram. E o smoke manual do owner — que o contrato
+  do final gate lista como ponto 6 — não só não foi executado como, do jeito que
+  o roteiro está escrito hoje, PASSARIA IDÊNTICO com toda a segurança do epic
+  desligada. Um smoke que não distingue os dois estados não prova nada sobre
+  este epic. Especifiquei as 6 mudanças (SMOKE-A..F) que o tornam capaz de
+  provar; sem elas, re-executá-lo é teatro.
+
+  (2) A PARTE MAIS FRÁGIL DO EPIC SÓ EXISTE COMO PREDIÇÃO EM PRODUÇÃO. Todo o
+  rate limiting depende de que o owner das funções SECURITY DEFINER tenha
+  BYPASSRLS para escrever numa tabela com RLS ligada e zero policy. Em dev isso
+  é fato observado. Em prod é inferência — e o modo de falha é o pior possível:
+  o `exception when others` engole o erro, o limiter libera tudo, e nenhum sinal
+  fica vermelho. Um produto que se declara protegido sem estar é pior que um que
+  se sabe desprotegido. Por isso PRE-M7 não é opcional.
+
+  (3) O RISCO REAL DESTE MERGE NÃO ESTÁ NO CÓDIGO, ESTÁ NO PROVISIONAMENTO. E
+  ele tem uma armadilha específica que quase ninguém pega: o job `quality` do CI
+  não declara `environment:`, então um RATE_LIMIT_PEPPER criado apenas no
+  environment `production` do GitHub fica invisível para ele — a CI falha, e
+  como `migrate-production` tem `needs: quality`, as migrations NÃO são
+  aplicadas. Resultado: main mergeada, código novo no ar, schema antigo no
+  banco. É o cenário que mais me preocupa em todo o epic, e ele se evita com um
+  `gh secret set` no escopo certo. Some-se a isso que a CSP passou a depender de
+  NEXT_PUBLIC_SUPABASE_URL em TEMPO DE BUILD — dependência nova, silenciosa, e
+  cujo modo de falha é o login quebrar no browser sem um único erro de servidor.
+
+  Sobre a ordem das migrations, que era a pergunta aberta mais séria: sondei o
+  banco de produção e a resposta é tranquilizadora por um motivo específico e
+  temporário — prod tem 1 profile e ZERO cliques. As 5 migrations são aditivas,
+  não fazem backfill, e a única cadeia de dependência não-óbvia (o revoke de
+  check_rate_limit versus a chamada interna feita por record_link_click) está
+  provada no estado final em dev. A janela não-ordenada entre CD e deploy é
+  real, mas em ambas as ordens a única vítima é o tracking, e não há tráfego
+  para perder. Este argumento expira no momento em que produção tiver volume.
+
+  Recomendo mergear. Recomendo com mais ênfase ainda que PRE-M7 seja executado
+  na mesma sessão do merge, e que o smoke atualizado seja rodado antes de
+  qualquer declaração de 'publicável em produção aberta'. O epic promoveu o
+  produto de funcional para defensável; declará-lo publicável é uma afirmação
+  sobre produção, e produção ainda não foi observada.
+
+tag: "epic-6-complete"
+next_actions:
+  - "@devops — PRE-M1..PRE-M6 (BLOCKING), depois merge, depois PRE-M7 na mesma sessão"
+  - "@sm — atualizar docs/smoke-test.md com SMOKE-A..F antes de OWN-1"
+  - "Owner — smoke atualizado (fecha HD-1, HD-2 e HD-3 numa sessão)"
+  - "@architect — DEBT-001 (TD-1) e reavaliação da CSP com nonce (TD-2)"
+  - "@sm — retro do Epic 5 (HD-5) e depois retro do Epic 6"
