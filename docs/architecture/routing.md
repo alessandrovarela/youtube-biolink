@@ -26,7 +26,12 @@ app/
 └── health/route.ts     → /health
 ```
 
-**Sem middleware rewrite no MVP.** [Source: architecture.md § 2.5, § 10.3]
+**Sem middleware rewrite.** [Source: architecture.md § 2.5, § 10.3]
+
+> **Atualizado pela Story 6.5 (Epic 6):** passou a existir um `middleware.ts` na raiz,
+> mas ele **não faz rewrite nem participa da resolução de rotas** — só auth guard e
+> refresh de sessão em `/dashboard/*`. A resolução continua 100% por precedência do
+> App Router + reserved-list. Ver § 6.
 
 ---
 
@@ -57,9 +62,10 @@ outra metade da garantia — a reserved-list (ver § 4). [Source: architecture.m
 O PRD usa `/@username` como **rótulo de marca** (branding), mas o **path real** no
 App Router é `/username` — **sem `@` na URL**. O `@` nunca chega ao roteador.
 
-O rewrite `/@username → /[username]` (para tornar o `@` parte da URL) é um
-**stretch opcional do Epic 6, Story 6.5** (Middleware + CSP), **fora do escopo do
-MVP**. Enquanto isso não existir, links de marca devem apontar para `/username`.
+O rewrite `/@username → /[username]` (para tornar o `@` parte da URL) era um
+**stretch opcional da Story 6.5**, explicitamente **fora do DoD** (decisão #3 do
+Epic 6). A Story 6.5 foi entregue **sem** o rewrite — ele permanece não implementado.
+Links de marca devem continuar apontando para `/username`.
 [Source: architecture.md § 2.5 (tabela de alternativas — "Middleware rewrite `/@username`");
 prd.md Story 6.5]
 
@@ -122,7 +128,78 @@ format-válidos. A precedência estática > dinâmica é assegurada pelo App Rou
 
 ---
 
-## 6. Referências
+## 6. Middleware edge e headers de segurança (Story 6.5)
+
+> **Atualiza as seções 1 e 3**, que afirmavam "não há `middleware.ts` na raiz no MVP".
+> Desde a Story 6.5 (Epic 6) **existe** `middleware.ts` — mas ele **não** faz rewrite
+> e **não** participa da resolução de rotas. A precedência descrita na § 2 e a
+> reserved-list da § 4 continuam sendo os únicos mecanismos de roteamento.
+
+### 6.1 O que o middleware faz (e o que não faz)
+
+`middleware.ts` na raiz tem **duas** responsabilidades, ambas restritas a `/dashboard/*`:
+
+1. **Auth guard edge** — sem usuário → `redirect('/login?next={pathname}')`, antes do render.
+2. **Refresh proativo de token** — padrão de middleware do `@supabase/ssr` (`getUser()` +
+   propagação dos cookies renovados na resposta). Fecha a AC5 deferida da Story 2.9.
+
+**Não** faz rewrite de `/@username` (segue stretch não implementado, § 3) e **não**
+aplica headers.
+
+### 6.2 O matcher é positivo e enumerado
+
+```ts
+export const config = { matcher: ['/dashboard/:path*'] };
+```
+
+**Regra a preservar:** nunca substituir por um matcher catch-all com negative
+lookahead (o padrão da doc do Next). A página pública é um **segmento raiz dinâmico**
+(`/[username]`) — um matcher permissivo a captura, tornando a resposta dinâmica
+(ferindo NFR1) e cobrando invocação edge em toda request pública. `tests/unit/middleware.test.ts`
+falha se alguém introduzir `(?!` no matcher.
+
+Verificado em runtime: `/[username]`, `/_next/static/*`, `/login`, `/signup`,
+`/auth/callback`, `/health` e `/` **não** passam pelo middleware.
+
+### 6.3 Headers de segurança moram em `next.config.ts`, não no middleware
+
+| Onde | O quê | Por quê |
+|------|-------|---------|
+| `next.config.ts` (`headers()`) | CSP, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy` | Cobre **todas** as rotas (inclusive a pública e os assets) sem custo de invocação edge |
+| `middleware.ts` | auth guard + refresh de sessão | Precisa do matcher cirúrgico |
+
+Se a CSP morasse no middleware, ficaria limitada ao matcher — `/`, `/login`, `/signup`
+e `/[username]` responderiam **sem** headers de segurança.
+
+**HSTS não é definido no app:** a Vercel já aplica `Strict-Transport-Security` em
+produção. Duplicar criaria duas fontes de verdade.
+
+### 6.4 CSP sem nonce — tradeoff assumido
+
+A CSP é **enforce** (não Report-Only) e **não usa nonce**. Motivo: um nonce muda a cada
+request, tornando a resposta não-cacheável — incompatível com headers estáticos e com o
+`revalidate` da página pública (NFR1). Nonce via middleware cobriria apenas `/dashboard/*`,
+criando duas CSPs divergentes para manter.
+
+**Consequência assumida:** `script-src` inclui `'unsafe-inline'`, exigido de qualquer forma
+pelo payload RSC inline do App Router (`self.__next_f.push`) e pelo script anti-flash do
+`ThemeProvider` (Story 4.3). A defesa contra XSS permanece app-layer (escaping do React +
+validação de entrada). A CSP ainda entrega `frame-ancestors`, `object-src`, `base-uri`,
+`form-action` e um `connect-src` restrito ao Supabase.
+
+Diretivas cuja remoção quebraria a UI **silenciosamente** (mudar só com verificação de console):
+
+- `style-src 'unsafe-inline'` — Tailwind 4, `next/font` e `style={{...}}` (Avatar, nav,
+  theme-selector, dnd-kit) serializado como atributo `style=` no SSR.
+- `img-src https:` — `profile.avatar_url` é URL **arbitrária** do usuário em `<img>` puro.
+- `connect-src <supabase>` — REST/Auth do Supabase.
+
+`'unsafe-eval'` e `ws:` entram **apenas em dev** (HMR/react-refresh). Verificado: os chunks
+de produção não usam `eval`/`new Function`.
+
+---
+
+## 7. Referências
 
 - `docs/architecture.md` § 2.5 (Reserved-list Routing) e § 10.3 (árvore `app/`).
 - `docs/prd.md` § 6 — Epic 3, Story 3.6; Story 6.5 (middleware edge + CSP, Epic 6).
