@@ -76,13 +76,42 @@ export const RATE_LIMIT_MESSAGE = 'Muitas tentativas. Aguarde alguns minutos e t
  * porque só o app enxerga o IP do visitante.
  *
  * POR ISSO O COMPORTAMENTO MUDOU DE "DEGRADAR" PARA "FALHAR ALTO":
- *   • production sem pepper → lança na CARGA DO MÓDULO. O app não sobe. Um deploy mal
- *     provisionado quebra ruidosamente no boot, e não silenciosamente meses depois numa
- *     campanha de lockout que ninguém correlaciona. Fail-fast > fail-silent quando o
- *     que falha é um controle de segurança.
+ *   • production sem pepper → lança. Fail-fast > fail-silent quando o que falha é um
+ *     controle de segurança.
  *   • development/test sem pepper → fallback fixo e documentado + aviso ÚNICO e
  *     explícito. Dev não pode exigir provisionamento manual para `pnpm dev` funcionar,
  *     mas a diferença tem que estar registrada, não escondida.
+ *
+ * ┌────────────────────────────────────────────────────────────────────────────┐
+ * │ ONDE ESTE THROW REALMENTE DISPARA — E POR QUE ELE NÃO É O GATE PRINCIPAL     │
+ * └────────────────────────────────────────────────────────────────────────────┘
+ * Uma versão anterior deste comentário afirmava que sem o env "o app NÃO SOBE" e
+ * "quebra ruidosamente NO BOOT". O gate da Wave 4 TESTOU e a afirmação era FALSA.
+ * Registramos aqui o comportamento REAL, porque num arquivo didático um comentário
+ * que descreve algo que o código não faz ensina a coisa errada:
+ *
+ *   `next build` → EXIT 0. `next start` → sobe limpo. `/`, `/login`, `/signup`,
+ *   `/health` e `/[username]` → 200, ZERO erro no log. O throw só dispara na PRIMEIRA
+ *   INVOCAÇÃO de uma Server Action que importe este módulo, com HTTP 500.
+ *
+ * A causa: o Next carrega módulos de Server Action SOB DEMANDA. Um `throw` de topo de
+ * módulo não roda no boot se o módulo não é carregado no boot. É uma armadilha geral de
+ * validação de configuração em Next — não uma peculiaridade deste arquivo.
+ *
+ * Por que isso era o PIOR posicionamento possível: tarde demais para impedir o deploy
+ * ruim, e cedo demais para ser inofensivo. Um deploy mal provisionado ficava com todos
+ * os sinais verdes (build, deploy, homepage, página pública, /health) enquanto login,
+ * signup, reset E tracking devolviam 500 — monitoração de disponibilidade de página não
+ * veria nada.
+ *
+ * POR ISSO O GATE DE VERDADE MUDOU DE LUGAR: mora em `next.config.ts`
+ * (`assertProductionEnv`), avaliado ANTES de qualquer compilação, e portanto capaz de
+ * FALHAR O BUILD — o artefato ruim nunca chega a existir. Reforçado por um passo de
+ * preflight no CI (.github/workflows/ci.yml).
+ *
+ * ESTE throw permanece como BACKSTOP redundante, que em operação normal NUNCA dispara:
+ * se alguém remover o gate de build, o controle de segurança ainda falha alto em vez de
+ * degradar em silêncio. [Source: gate Wave 4 issue #1]
  *
  * NÃO É UMA CREDENCIAL PRIVILEGIADA (contraste didático com a service role key, que
  * entregaria o banco inteiro): vazar o pepper permite forjar baldes de rate limit — um
@@ -112,15 +141,16 @@ export function pepper(): string {
     console.warn(
       '[rate-limit] RATE_LIMIT_PEPPER não definido — usando o fallback FIXO de ' +
         'development. Os subjects são previsíveis e forjáveis: aceitável só fora de ' +
-        'produção. Em production a ausência do env LANÇA e o app não sobe.'
+        'produção. Em production o build FALHA sem este env (next.config.ts).'
     );
   }
   return DEV_PEPPER_FALLBACK;
 }
 
-// Gate de INICIALIZAÇÃO: em produção a falta do pepper derruba a carga do módulo, e não
-// a primeira requisição. Falhar no boot é o que garante que um ambiente mal
-// provisionado nunca chegue a servir tráfego achando que está protegido.
+// BACKSTOP redundante. O gate que efetivamente barra o deploy é `assertProductionEnv()`
+// em next.config.ts, avaliado antes da compilação. Este aqui só se materializa se
+// alguém remover aquele — e, mesmo então, dispara na primeira Server Action e não no
+// boot (ver o bloco acima). Mantido de propósito: a redundância custa uma linha.
 if (process.env.NODE_ENV === 'production') pepper();
 
 /**
