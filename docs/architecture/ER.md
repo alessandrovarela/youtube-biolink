@@ -181,11 +181,59 @@ agregação de cliques de todos os perfis. Correções aplicadas na mesma migrat
 - `revoke insert, update, delete, truncate on public.link_clicks from anon, authenticated`
   — segunda camada sob a negação da RLS (não afeta a RPC, que roda como owner).
 
+### `rate_limit_counters` — rate limiting (Story 6.4, `20260719190000_rate_limit.sql`)
+
+Tabela **puramente interna**: RLS habilitada **sem policy** (deny-all) e
+`revoke all ... from anon, authenticated`. Nenhuma role de aplicação a enxerga — nem
+para descobrir quanto do próprio limite já gastou. Só a função `SECURITY DEFINER`
+`check_rate_limit`, que roda como o owner, a lê e escreve.
+
+| Coluna | Tipo | Nota |
+|--------|------|------|
+| `bucket` | `text` | `signup` \| `login` \| `reset` \| `track` \| `track_link` |
+| `subject` | `text` | **Digest hex de 64 chars** (SHA-256 + pepper do IP) para os buckets de app; `link_id` (uuid) para `track_link`. **NUNCA IP raw** (NFR19) |
+| `window_start` | `timestamptz` | Início do sub-bucket (truncado) |
+| `hits` | `int` | Contador do sub-bucket |
+
+PK composta `(bucket, subject, window_start)` + índice em `(window_start)` (housekeeping).
+
+- **`check_rate_limit(text, text, int, int, int) → boolean`** — janela deslizante por
+  sub-buckets, `SECURITY DEFINER`, `set search_path = public`, `revoke all from public` +
+  `grant execute to anon, authenticated`. Serializa por chave com
+  `pg_advisory_xact_lock`; soma os sub-buckets dentro da janela; **quando estourado
+  retorna `false` SEM incrementar** (não estende a punição); housekeeping oportunista
+  (~1% das chamadas) apaga registros com mais de 24h. Termina com
+  `exception when others then return true` — **fail-open deliberado** (disponibilidade
+  acima de throttle; ADR-001 § 3/§ 4).
+- **Targets do NFR18:** `signup` 5/3600s · `login` 10/900s · `reset` 3/3600s ·
+  `track` 60/60s por `hash(ip + ':' + linkId)` — aplicados em `lib/rate-limit.ts`.
+- **Nenhum IP é persistido em lugar nenhum.** O IP é lido dos headers da borda
+  (`x-forwarded-for` leftmost → `x-real-ip` → `'unknown'`), usado **em memória** e
+  descartado; só o digest sai do processo. Env `RATE_LIMIT_PEPPER` (server-only, **nunca**
+  `NEXT_PUBLIC_*`, não privilegiado).
+
+#### Mudanças da 6.4 em `record_link_click` e `link_clicks`
+
+- **Teto por link DENTRO da RPC.** `record_link_click` passou a chamar
+  `check_rate_limit('track_link', p_link_id::text, 60, 60, 10)` antes do INSERT.
+  Motivo (concern #1 do gate da Wave 2, **provado por probe**): a RPC é
+  `grant execute to anon` e chamável direto pelo PostgREST, então um rate limit que
+  vivesse só na Server Action fecharia a porta da frente com a dos fundos aberta.
+  O teto é avaliado em **toda** chamada, venha de onde vier. **A assinatura
+  `(uuid, text)` NÃO mudou** — `create or replace` substitui o corpo e não cria
+  sobrecarga (uma sobrecarga sem teto seria o próprio bypass de volta).
+- **`revoke select, references, trigger on link_clicks from anon`** (concern #2 do
+  mesmo gate): restaura a simetria de defesa em camadas — a escrita já tinha duas
+  (RLS + ausência de grant), a leitura tinha só a RLS. `authenticated` **mantém o
+  SELECT**, exigido pela view `link_click_daily` com `security_invoker = on`.
+  Efeito observável: `GET /rest/v1/link_clicks` anônimo passou de `200 []` para
+  `permission denied` (42501).
+
 ## Forward-looking (fora do Epic 3)
 
 | Entidade / mudança | Epic | Nota |
 |--------------------|------|------|
-| `rate_limit_counters` + `check_rate_limit()` | Epic 6 | Story 6.4 — fecha o débito de **click inflation**: a RLS bloqueia ids inválidos/inativos, mas não impede POSTs repetidos à RPC contra um link **ativo legítimo**. Ver ADR-001 § 3. |
+| — | — | Sem entidades pendentes. `rate_limit_counters` foi entregue pela Story 6.4 e está documentada acima. |
 
 > `link_clicks` (Epic 5, Story 5.1) já está entregue e documentada acima como
 > entidade real (schema aplicado). A coleta de cliques (Server Action com UA
