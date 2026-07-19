@@ -7,11 +7,22 @@
 // ANÔNIMO da página pública `/[username]`, sem sessão. Por isso usamos
 // createPublicClient() (stateless, sem cookies) — o MESMO client da leitura
 // pública (Story 3.5), e não createServerClient() (que exige cookies de sessão).
-// Sem SERVICE_ROLE: `link_clicks` não tem RLS no MVP (Story 5.1; RLS deferida p/
-// Story 6.3), então o INSERT com a anon key funciona diretamente.
 //
-// Privacidade: grava apenas o user-agent truncado (<=120), SEM IP raw;
-// `user_agent_hash` fica null (stretch, não obrigatório). Sem rate limiting (Epic 6).
+// Story 6.3 — a escrita passa a ser feita pela RPC `record_link_click`:
+//   `link_clicks` agora tem RLS habilitada e NENHUMA policy de INSERT, ou seja, o
+//   INSERT direto com a anon key é NEGADO pelo banco (era o concern MEDIUM do gate do
+//   Epic 5: a anon key é pública, então qualquer um podia POSTar cliques falsos).
+//   A única porta de escrita é a função SECURITY DEFINER `record_link_click`, que
+//   valida `is_active` DENTRO do banco, atômico com o INSERT.
+//   Ganhos: (1) o SELECT prévio de `links` some daqui — 2 round-trips viram 1;
+//           (2) acaba a janela TOCTOU entre "conferi que está ativo" e "inseri";
+//           (3) NENHUM client novo e NENHUM env novo — nada de service role no runtime
+//               (o admin client foi explicitamente REFUTADO pelo ADR-001).
+//   [Source: docs/architecture/security-epic-6.md — ADR-001 § 2]
+//
+// Privacidade: grava apenas o user-agent truncado (<=120), SEM IP raw; a RPC trunca
+// de novo no banco (defesa em camadas). `user_agent_hash` fica null (stretch, não
+// obrigatório). Rate limiting / click inflation: Story 6.4 — ainda em aberto aqui.
 // [Source: architecture.md § 5.1; docs/architecture/ER.md — Epic 5; PRD Story 5.2]
 
 import { headers } from 'next/headers';
@@ -28,40 +39,34 @@ const GENERIC_ERROR = 'Não foi possível registrar o clique.';
 
 /**
  * Registra um clique em um link ativo. Chamada a partir da página pública por um
- * visitante anônimo. Valida que `linkId` é um UUID e que o link EXISTE e está
- * `is_active = true` ANTES de inserir (evita lixo na tabela append-only).
+ * visitante anônimo. Valida que `linkId` é um UUID no app e delega ao banco a
+ * validação autoritativa de existência + `is_active` (RPC `record_link_click`,
+ * atômica com o INSERT) — evita lixo na tabela append-only sem janela TOCTOU.
  *
  * NUNCA lança: qualquer falha (input inválido, link inexistente/inativo, erro de
  * banco ou de contexto) vira um ActionResult de erro — um clique não deve quebrar
- * a navegação do visitante. [Source: PRD Story 5.2 AC2, AC6]
+ * a navegação do visitante. [Source: PRD Story 5.2 AC2, AC6; ADR-001 § 2]
  */
 export async function trackLinkClick(linkId: string): Promise<ActionResult> {
   try {
     const id = (linkId ?? '').trim();
     if (!UUID_RE.test(id)) return { ok: false, error: 'Link inválido' };
 
-    const supabase = createPublicClient();
-
-    // 1) O link precisa existir e estar ativo — caso contrário, não registra.
-    const { data: link, error: linkErr } = await supabase
-      .from('links')
-      .select('id, is_active')
-      .eq('id', id)
-      .maybeSingle();
-    if (linkErr) return { ok: false, error: GENERIC_ERROR };
-    if (!link) return { ok: false, error: 'Link não encontrado' };
-    if (!link.is_active) return { ok: false, error: 'Link inativo' };
-
-    // 2) User-agent truncado (<=120), sem IP raw. hash fica null (stretch).
+    // 1) User-agent truncado (<=120), sem IP raw. hash fica null (stretch).
     const h = await headers();
     const ua = h.get('user-agent');
     const userAgentShort = ua ? ua.slice(0, UA_MAX) : null;
 
-    // 3) INSERT append-only via client público (anon, stateless): sem RLS no MVP.
-    const { error: insErr } = await supabase
-      .from('link_clicks')
-      .insert({ link_id: id, user_agent_short: userAgentShort });
-    if (insErr) return { ok: false, error: GENERIC_ERROR };
+    // 2) Escrita pela ÚNICA porta aberta: a RPC valida is_active no banco e insere na
+    //    MESMA transação. `false` = link inexistente ou inativo (no-op silencioso).
+    //    createPublicClient() (anon key, stateless) preserva o ISR da página pública.
+    const supabase = createPublicClient();
+    const { data, error } = await supabase.rpc('record_link_click', {
+      p_link_id: id,
+      p_user_agent_short: userAgentShort,
+    });
+    if (error) return { ok: false, error: GENERIC_ERROR };
+    if (data !== true) return { ok: false, error: 'Link não encontrado ou inativo' };
 
     return { ok: true };
   } catch {
