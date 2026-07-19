@@ -6,8 +6,11 @@
 
 ## Visão geral
 
-No MVP a autorização é **application-layer** (Server Actions filtram por
-`auth.uid()`), sem RLS — o RLS entra no Epic 6 (stories 6.1–6.3). O ER abaixo
+No MVP a autorização era **application-layer** (Server Actions filtram por
+`auth.uid()`), sem RLS. O Epic 6 **adiciona** RLS como segunda barreira, sem
+remover os filtros de aplicação (NFR3, defense-in-depth): `profiles` já está com
+RLS ligada (Story 6.1, migration `20260719170252_profiles_rls.sql`); `links` e
+`link_clicks` seguem sem RLS até as stories 6.2/6.3. O ER abaixo
 reflete o schema **real aplicado** (`profiles`, migration `20260614220038`) e o
 schema **planejado** (`links`, Story 3.1).
 
@@ -76,7 +79,30 @@ erDiagram
 | `links` | `(profile_id, position)` | ordenação dos links por usuário — leitura do dashboard e da página pública. *(a criar na Story 3.1 AC2.)* |
 | `link_clicks` | `(link_id, clicked_at DESC)` | agregações/leituras de analytics por link, ordenadas por recência. *(Story 5.1 AC2.)* |
 
-## Regras de autorização no MVP (sem RLS)
+## Regras de autorização
+
+### `profiles` — RLS **ligada** (Story 6.1, Epic 6)
+
+Migration `20260719170252_profiles_rls.sql` — policies criadas e `ENABLE ROW LEVEL
+SECURITY` no mesmo arquivo (habilitar sem policy = lockout).
+
+| Policy | Comando | Roles | Expressão |
+|---|---|---|---|
+| `profiles_select_public` | SELECT | `anon`, `authenticated` | `USING (true)` |
+| `profiles_update_own` | UPDATE | `authenticated` | `USING (id = (select auth.uid()))` · `WITH CHECK (id = (select auth.uid()))` |
+
+- **Leitura é pública por design.** Todas as colunas de `profiles` já eram públicas
+  (a página `/@username` lê 5 delas com a anon key) e a checagem de username
+  duplicado do signup roda como role `anon` (`lib/actions/auth.ts:37`) — uma policy
+  de SELECT baseada em `auth.uid()` quebraria o cadastro **silenciosamente**.
+  A RLS aqui protege **escrita**.
+- **Sem policy de INSERT:** o único INSERT é o trigger `handle_new_user()`
+  (`SECURITY DEFINER`, owner `postgres` → `BYPASSRLS`), que roda fora do contexto RLS.
+- **Sem policy de DELETE:** remoção só via `ON DELETE CASCADE` de `auth.users`.
+- **App-layer intacta:** os filtros `.eq('id', user.id)` de `lib/actions/profile.ts`
+  e do dashboard permanecem — a RLS soma, não substitui.
+
+### `links` e `link_clicks` — ainda sem RLS (MVP)
 
 - **Escrita (`links`):** Server Actions (`createLink`/`updateLink`/`deleteLink`/
   `toggleActive`/`reorderLinks`) filtram por `profile_id = auth.uid()`. Usuário A
@@ -90,7 +116,8 @@ erDiagram
 
 | Entidade / mudança | Epic | Nota |
 |--------------------|------|------|
-| RLS + policies em `profiles` / `links` / `link_clicks` | Epic 6 | stories 6.1/6.2/6.3 — autorização migra do app-layer para o banco. |
+| RLS + policies em `links` / `link_clicks` | Epic 6 | stories 6.2/6.3 — a RLS **soma** ao app-layer (NFR3), não o substitui. `profiles` (6.1) já entregue. |
+| `security_invoker` + revogação de `anon` na view `link_click_daily` | Epic 6 | Story 6.3 — vazamento ativo hoje (ver inventário § 4/R3). |
 
 > `link_clicks` (Epic 5, Story 5.1) já está entregue e documentada acima como
 > entidade real (schema aplicado). A coleta de cliques (Server Action com UA
