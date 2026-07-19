@@ -1,6 +1,6 @@
 # ADR-001 — Segurança do Epic 6: escrita de tracking sob RLS e rate limiting
 
-> **Status:** Aceita · **Data:** 2026-07-19 · **Autoridade:** `@architect` (Aria) — Design Authority
+> **Status:** Aceita · **Emendada em 2026-07-19 (Emenda 1, § 6)** · **Autoridade:** `@architect` (Aria) — Design Authority
 > **Origem:** `EPIC-6-EXECUTION.yaml` PRE-1 (decisões #1 e #2) · **Bloqueia:** Stories 6.3 e 6.4
 > **Contratada pelo PRD:** NFR18 (L90) e Story 5.2 AC3 (L716) delegam ambas as escolhas ao @architect.
 > [Source: docs/prd.md — FR21, NFR3, NFR18, NFR19; docs/architecture/ER.md]
@@ -270,6 +270,11 @@ notify pgrst, 'reload schema';
 | `reset` | 3 | 3600s | 60 | `hash(ip)` |
 | `track` | 60 | 60s | 10 | `hash(ip + ':' + linkId)` |
 
+> ⚠️ **O bucket `track`, sozinho, NÃO fecha o vetor de click inflation** — ele só alcança
+> o caminho da Server Action, e `record_link_click` é chamável direto pelo PostgREST.
+> Provado empiricamente pelo gate da Wave 2. **Ver § 6 (Emenda 1)** para o desenho
+> definitivo que a Story 6.4 deve implementar.
+
 **Comportamento no estouro** (contratado pelo epic):
 - **signup / login / reset** → mensagem genérica e amigável, sem revelar o mecanismo nem
   enumerar contas (ex.: *"Muitas tentativas. Aguarde alguns minutos e tente novamente."*),
@@ -367,6 +372,264 @@ banimento persistente, pg_cron, fingerprinting de dispositivo. Nada disso está 
 |---|---|---|---|
 | 1 | INSERT de tracking pós-RLS | **(a) RPC `SECURITY DEFINER`** — (b) admin client refutada | Story 6.3: RLS deny-all em `link_clicks` + `record_link_click(uuid, text) → boolean` + refactor de `track-click.ts` para `.rpc()` |
 | 2 | Tecnologia de rate limiting | **Supabase-native** — Upstash/Vercel KV refutados | Story 6.4: `rate_limit_counters` + `check_rate_limit(text,text,int,int,int) → boolean` (janela deslizante por sub-buckets) + `lib/rate-limit.ts` com IP hasheado |
+| 3 | Ponto de aplicação do bucket `track` (**Emenda 1, § 6**) | **Dentro da RPC**, teto por `link_id` + prova de app — `request.headers` e `p_client_key` puro refutados | Story 6.4: `drop function record_link_click(uuid,text)` (fecha a sobrecarga sem teto) + v2 `(uuid,text,text)` com `check_rate_limit('track_link', …)` + `private.app_secrets` + `revoke select … from anon` (concern #2) |
 
 **Não faz parte desta decisão:** as policies de `profiles` (6.1) e `links` (6.2), já
 nominadas no PRD/epic, nem o middleware/CSP (6.5).
+
+---
+
+## 6. Emenda 1 — Onde o rate limit de tracking é aplicado (2026-07-19)
+
+> **Gatilho:** `docs/qa/gates/epic-6-wave-2-gate.yml` concerns #1 (medium) e #2 (low),
+> solicitada pelo @pm antes da liberação da Story 6.4. **Altera** o § 3 (ponto de
+> aplicação do bucket `track`) e o § 2 (assinatura de `record_link_click`).
+> As Decisões 1 e 2 em si permanecem ratificadas.
+
+### 6.1 O problema (empírico, não teórico)
+
+O § 3 mandou aplicar `checkRateLimit('track', …)` dentro de `trackLinkClick` — uma Server
+Action. Mas o § 2 concedeu `grant execute on record_link_click to anon`, e a função está
+publicada em `POST /rest/v1/rpc/record_link_click`. **Os dois caminhos existem e só um
+seria limitado.** O @qa provou: 20 chamadas `curl` diretas com a anon key pública contra
+o link ativo `a22e0cf2…` levaram a contagem de 1 → 21, sem tocar no Next.js (linhas
+removidas no cleanup). O desenho original fecharia a porta da frente e declararia vitória
+com a dos fundos aberta.
+
+Isso **não é regressão da 6.3** — a 6.3 estreitou o vetor de "qualquer linha arbitrária
+em `link_clicks`" para "apenas links ativos legítimos, uma linha por chamada". O defeito
+é do plano da 6.4, ou seja, deste ADR.
+
+### 6.2 Verificação pedida pelo @pm: `request.headers` **não** é a saída — análise procede
+
+O Supabase expõe os headers da requisição em `current_setting('request.headers', true)::json`.
+**Confirmo a análise do @pm e acrescento um segundo motivo independente. Opção descartada
+por duas razões, cada uma suficiente:**
+
+1. **Inútil no caminho legítimo.** `trackLinkClick` usa `createPublicClient()`
+   *server-side*: quem abre a conexão com o PostgREST é a função da Vercel, não o browser
+   do visitante. O `x-forwarded-for` visto pelo Postgres é o **IP de egresso da Vercel**.
+   Um limite por esse valor colapsaria **todo** o tráfego legítimo do produto num único
+   bucket global — o rate limiter viraria um interruptor de desligar o tracking inteiro
+   no primeiro minuto movimentado.
+2. **Forjável no caminho hostil.** Quem chama o PostgREST direto controla os próprios
+   headers e pode variar `x-forwarded-for` a cada request. O único cliente cujo IP o
+   banco enxergaria de forma confiável é justamente o que não queremos limitar.
+
+Pelo mesmo motivo, **`p_client_key` vindo do cliente também está descartado como chave
+única**: um atacante direto geraria um subject aleatório por chamada e evadiria o limite
+integralmente. Só serve se combinado com prova de que o chamador é o app (§ 6.3, camada 3).
+
+### 6.3 Decisão: mover o teto para dentro da RPC, com chave que o banco controla
+
+O limite tem de ser avaliado **onde as duas rotas convergem — dentro de
+`record_link_click`** — e chaveado por algo que o banco conheça de forma autoritativa e
+que o chamador não escolha. Só existe um candidato: **`p_link_id`**, que é exatamente o
+recurso sendo inflado. Três camadas:
+
+| # | Camada | Onde | Chave | Alcança o curl direto? |
+|---|---|---|---|---|
+| 1 | Teto por link (**backstop**) | dentro da RPC | `link_id` (do banco) | **Sim — sempre** |
+| 2 | Limite por visitante (NFR18) | Server Action | `hash(ip + ':' + linkId)` | Não (por desenho) |
+| 3 | Prova de app | dentro da RPC | segredo server-only | Dimensiona o teto da camada 1 |
+
+**Camada 3 é o que separa os dois caminhos.** A anon key é pública por definição (vai no
+bundle do browser) — ela não distingue ninguém. Mas `trackLinkClick` roda no servidor e
+pode enviar um segredo que o browser **nunca** vê. Chamador com o segredo correto =
+servidor da Vercel → teto generoso. Chamador sem ele = qualquer um com a anon key → teto
+apertado. É a mesma filosofia da Decisão 1 (privilégio estreito): o segredo autoriza
+**uma** coisa — um teto maior nesta RPC — e não é uma chave de bypass do banco como a
+service role key, que segue refutada.
+
+**Por que não simplesmente `revoke execute from anon`:** o app se autentica no PostgREST
+*como* `anon` (é a anon key no `createPublicClient`). Revogar quebra o caminho legítimo.
+Usar outro papel exigiria service role (refutada) ou assinar JWT customizado com o JWT
+secret do projeto — que permite forjar um token `service_role` e portanto é *mais*
+perigoso que a chave que recusamos. Descartado.
+
+**Artigo IV (No Invention):** o teto por link **não é um controle novo**. É o rate
+limiting de tracking que o NFR18 já contratou, realocado para o único ponto de aplicação
+que cobre todos os chamadores. Nenhum controle fora do PRD é introduzido (nada de captcha,
+fingerprint ou bloqueio de conta).
+
+**Limites (o de visitante é literal do NFR18; os tetos por link são dimensionamento):**
+
+| Camada | Limite | Janela | Justificativa |
+|---|---|---|---|
+| 2 — por visitante | **60** / `(ip, linkId)` | 60s | NFR18 verbatim, inalterado |
+| 1 — teto por link, chamador **confiável** | **600** / `linkId` | 60s | 10× de folga para um link legitimamente viral, e ainda um teto duro protegendo o free tier (NFR8) |
+| 1 — teto por link, chamador **não confiável** | **60** / `linkId` | 60s | Um anônimo direto não recebe mais do que um único visitante teria direito |
+
+### 6.4 SQL concreto para a Story 6.4
+
+**(a) Cofre do segredo — schema privado, invisível a `anon`/`authenticated`.**
+O segredo **não** entra na migration (o repositório é público): a tabela nasce vazia e é
+sempre o *hash* que se armazena, nunca o valor.
+
+```sql
+create schema if not exists private;
+revoke all on schema private from anon, authenticated;
+
+create table if not exists private.app_secrets (
+  name          text primary key,
+  secret_sha256 text        not null,   -- SHA-256 hex do segredo, NUNCA o segredo
+  updated_at    timestamptz not null default now()
+);
+
+-- Sem policy = negação total. Só funções SECURITY DEFINER enxergam esta tabela.
+alter table private.app_secrets enable row level security;
+revoke all on table private.app_secrets from anon, authenticated;
+```
+
+Seeding fora do versionamento (@devops, dev + prod), com o valor de `TRACKING_APP_PROOF`:
+
+```sql
+insert into private.app_secrets (name, secret_sha256)
+values ('tracking_app_proof', encode(digest('<valor-do-env>', 'sha256'), 'hex'))
+on conflict (name) do update
+  set secret_sha256 = excluded.secret_sha256, updated_at = now();
+```
+
+**(b) `record_link_click` v2 — o teto passa a ser avaliado aqui.**
+
+> 🔴 **`drop function` da assinatura antiga é OBRIGATÓRIO.** Adicionar um parâmetro com
+> default **cria uma sobrecarga**: a função `(uuid, text)` continuaria existindo,
+> `grant execute to anon`, **sem teto nenhum** — o bypass permaneceria publicado.
+> Derrubar a antiga é o passo que efetivamente fecha o vetor.
+
+```sql
+-- Fecha a sobrecarga sem teto. Ver aviso acima — não é higiene, é a correção.
+drop function if exists public.record_link_click(uuid, text);
+
+create or replace function public.record_link_click(
+  p_link_id          uuid,
+  p_user_agent_short text default null,
+  p_app_proof        text default null   -- segredo server-only; ausente = não confiável
+) returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_active   boolean;
+  v_expected text;
+  v_trusted  boolean := false;
+  v_limit    int;
+begin
+  select l.is_active into v_active from public.links l where l.id = p_link_id;
+  if v_active is not true then
+    return false;                      -- inexistente ou inativo → no-op (inalterado)
+  end if;
+
+  -- Camada 3: só o servidor Next.js conhece o segredo. A anon key, que é pública,
+  -- não prova nada. Comparação por hash: um dump do banco não entrega o segredo.
+  select s.secret_sha256 into v_expected
+  from private.app_secrets s
+  where s.name = 'tracking_app_proof';
+
+  v_trusted := v_expected is not null
+               and p_app_proof is not null
+               and encode(digest(p_app_proof, 'sha256'), 'hex') = v_expected;
+
+  v_limit := case when v_trusted then 600 else 60 end;
+
+  -- Camada 1: teto por LINK, avaliado em TODA chamada — Server Action ou curl direto.
+  -- subject = link_id (uuid, não é PII): NFR19 não se aplica, nada a hashear.
+  if not public.check_rate_limit('track_link', p_link_id::text, v_limit, 60, 10) then
+    return false;                      -- estourou → no-op silencioso (contrato 5.2)
+  end if;
+
+  insert into public.link_clicks (link_id, user_agent_short)
+  values (p_link_id, left(p_user_agent_short, 120));
+
+  return true;
+end;
+$$;
+
+revoke all on function public.record_link_click(uuid, text, text) from public;
+grant execute on function public.record_link_click(uuid, text, text) to anon, authenticated;
+```
+
+**(c) Concern #2 do gate — simetria de leitura em `link_clicks`.**
+O bloco (e) da migration da 6.3 argumenta que o GRANT deve ser revogado como segunda
+camada mesmo quando a RLS já nega; o raciocínio vale igual para o SELECT e não foi
+aplicado. A escrita tem duas camadas, a leitura só tinha uma:
+
+```sql
+revoke select, references, trigger on public.link_clicks from anon;
+revoke references, trigger on public.link_clicks from authenticated;
+```
+
+`authenticated` **mantém o SELECT** — ele é exigido pela view `link_click_daily` com
+`security_invoker = on` (bloco (d) da migration da 6.3). Revogá-lo derrubaria o dashboard
+de analytics.
+
+```sql
+notify pgrst, 'reload schema';
+```
+
+**(d) `lib/actions/track-click.ts` — camada 2 preservada, proof adicionado:**
+
+```ts
+// Camada 2 (NFR18): precisa do IP do visitante, que só existe aqui. Antes da RPC.
+if (!(await checkRateLimit('track', id))) return { ok: false, error: GENERIC_ERROR };
+
+const { data, error } = await supabase.rpc('record_link_click', {
+  p_link_id: id,
+  p_user_agent_short: userAgentShort,
+  p_app_proof: process.env.TRACKING_APP_PROOF ?? null,   // server-only, nunca NEXT_PUBLIC_*
+});
+```
+
+**(e) Ordem de deploy — sem janela de quebra.** O `drop function` derruba a assinatura de
+2 argumentos, mas o app antigo (ainda em produção durante a migration) chama com
+`p_link_id` + `p_user_agent_short`, e a v2 aceita essa chamada porque `p_app_proof` tem
+default. O tracking continua gravando na janela entre a migration e o deploy da Vercel —
+apenas como **não confiável** (teto de 60/min/link). Nenhum clique legítimo se perde em
+tráfego normal. Mesma propriedade se `TRACKING_APP_PROOF` ficar sem seed: degrada para o
+teto apertado em vez de quebrar o tracking (**falha degradando, não abrindo**).
+
+**(f) Testes que a 6.4 deve ter** (o gate provou o vetor com curl; a suíte precisa provar
+o fechamento): 61 chamadas diretas à RPC **sem** `p_app_proof` contra um link ativo →
+60 gravam, a 61ª retorna `false` sem inserir; a mesma sequência **com** o proof correto
+respeita o teto de 600; `select` no catálogo confirma que a sobrecarga `(uuid, text)`
+não existe mais; `GET /rest/v1/link_clicks` com anon key → `permission denied` (não mais
+`200 []`), fechando o concern #2.
+
+### 6.5 O que permanece descoberto (aceito, com justificativa)
+
+O vetor é **fechado como bypass** (nenhum caminho escapa do teto) e **bounded como abuso**
+— não é eliminado. Explicitamente:
+
+1. **Inflação até o teto continua possível.** Um atacante direto ainda pode gravar
+   60 cliques/min/link (~86k/dia) sem passar pelo Next.js. Rate limiting limita
+   **volume**, nunca **autenticidade** — nenhum ajuste de limite torna um clique forjado
+   distinguível de um real. Distinguir exigiria prova de humanidade por visitante
+   (captcha), **fora do PRD** (Artigo IV, não-escopo do epic). Aceito.
+2. **Vazamento de `TRACKING_APP_PROOF`** (comprometimento do servidor, log de env,
+   import acidental em Client Component) eleva o atacante ao teto de 600/min. Continua
+   limitado; e o dano é incomparavelmente menor que o da service role key recusada na
+   Decisão 1.
+3. **Link legitimamente viral acima de 600 cliques/min subnotifica.** Cliques acima do
+   teto não são enfileirados nem repostos — a analytics passa a ser um piso, não um
+   total. É o preço consciente de ter um teto; para este produto, proteger o free tier
+   (NFR8) vale mais que precisão em cauda extrema.
+4. **Ataque distribuído evade a camada 2 por construção** (muitos IPs, cada um abaixo de
+   60/min). É exatamente por isso que a camada 1 não é chaveada por IP.
+5. **A camada 1 herda o fail-open de `check_rate_limit`** (§ 3): um erro interno do
+   limiter libera as escritas. Mantido por consistência com signup/login, onde
+   disponibilidade pesa mais. Um limiter quebrado degrada para o comportamento pós-6.3
+   — que já é melhor que o do MVP.
+6. **Contenção do advisory lock por link.** Todo clique no mesmo link serializa no
+   `pg_advisory_xact_lock` da chave `track_link:<uuid>`. O lock é de escopo de transação
+   e dura microssegundos, mas é o ponto quente previsível se um link viralizar.
+7. **Um segundo env server-only** (`TRACKING_APP_PROOF`, além de `RATE_LIMIT_PEPPER`) e
+   um passo de seeding **fora do versionamento** em dois ambientes. É drift operacional
+   possível; mitigado pela degradação segura do item (e).
+
+**Julgamento:** o custo (uma tabela privada, um env, um seed) é materialmente menor que o
+da alternativa que já recusamos na Decisão 1, e o vetor deixa de ser um bypass silencioso.
+**Não recomendo aceitar o débito puro** (opção (c) do gate): declarar "rate limiting
+entregue" com o caminho direto aberto é pior que não entregar, porque cria confiança
+indevida. Os resíduos acima são limites do que rate limiting *pode* fazer — não buracos
+no desenho.
