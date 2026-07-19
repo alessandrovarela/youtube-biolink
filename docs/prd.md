@@ -35,6 +35,7 @@ O **youtube-biolink** responde a esse gap construindo um biolink estilo Linktree
 | 2026-04-17 | 0.2     | Ajustes do owner: Next.js 16; remoção de E2E/Playwright; sem Supabase local (apenas cloud); stories em pt-BR | Morgan (PM) |
 | 2026-04-17 | 1.0     | **Aprovado pelo owner (Alessandro Varela); promovido para v1.0 e liberado para handoff ao @architect**       | Morgan (PM) |
 | 2026-04-17 | 1.1     | Reconciliação com arquitetura v0.3 (simplificação didática): NFR3 e NFR18 reformulados; FR21 reformulado; Story 2.2 removida (migra para Epic 6); ACs de RLS/rate-limit removidas de 2.4, 2.6, 2.7, 3.1, 5.1, 5.2; Epic 6 (Segurança em Camadas & Hardening) adicionado pós-Epic 5; Checklist H1/H2/H4 marcadas resolvidas e H3 movida para Epic 6. **Aprovado pelo owner (Alessandro Varela); liberado para handoff ao @ux-design-expert e @sm.** | Morgan (PM) |
+| 2026-07-19 | 1.3     | Reconciliação pré-Epic 6: o retorno do `createAdminClient`/`SUPABASE_SERVICE_ROLE_KEY` previsto na Section 4 e no AC6 da Story 1.3 foi **refutado pelo ADR de segurança do Epic 6** (`docs/architecture/security-epic-6.md`) — a escrita em `link_clicks` sob RLS passa a usar RPC `security definer` (`record_link_click`), de privilégio escopado, em vez de Service Role com bypass total. Único env novo do epic: `RATE_LIMIT_PEPPER` (Story 6.4). Rate limiting (NFR18) ratificado como Supabase-native, zero dependência nova. | Morgan (PM) |
 | 2026-06-14 | 1.2     | Reconciliação pré-Epic 2: Story 2.9 reformulada de "Middleware de proteção de rotas" para "Proteção de rotas via auth guard de layout" (`app/dashboard/layout.tsx`), resolvendo contradição com a arquitetura v1.0 (que proíbe edge middleware no MVP); middleware edge confirmado como escopo do Epic 6. Entrega de e-mail (2.5/2.7) definida como built-in do Supabase no MVP (sem SMTP customizado). **Decisões aprovadas pelo owner (Alessandro Varela).** | Morgan (PM) |
 
 ---
@@ -182,7 +183,7 @@ youtube-biolink/
 - **Server Actions** para mutações de dados do dashboard (preferência sobre Route Handlers, reduz boilerplate).
 - **Route Handlers** apenas para callbacks auth (`/auth/callback`) e eventuais webhooks futuros.
 - **Sem microserviços, sem filas, sem workers externos no MVP** — simplicidade didática.
-- Dois clientes Supabase distintos: `createServerClient()` (com cookies) e `createBrowserClient()` (public anon) — ensina a separação em SSR cookie-based. **No MVP (Epics 1–5) não há `createAdminClient` (SERVICE_ROLE)**; sem RLS ativo, não existe bypass a ser executado. O admin client volta junto com o Epic 6 quando a RLS for introduzida (ex.: insert de `link_clicks` com `security definer` ou Service Role).
+- Dois clientes Supabase distintos: `createServerClient()` (com cookies) e `createBrowserClient()` (public anon) — ensina a separação em SSR cookie-based. **No MVP (Epics 1–5) não há `createAdminClient` (SERVICE_ROLE)**; sem RLS ativo, não existe bypass a ser executado. **Decisão do Epic 6 (ADR `docs/architecture/security-epic-6.md`, 2026-07-19): o admin client NÃO volta.** Com a RLS introduzida, a escrita em `link_clicks` passa a ocorrer por uma função RPC `security definer` (`record_link_click`) — privilégio escopado a uma única operação, em vez de uma Service Role que faz bypass de RLS no banco inteiro. `SUPABASE_SERVICE_ROLE_KEY` permanece fora do runtime do app.
 
 ### Testing Requirements
 
@@ -300,7 +301,7 @@ para que as próximas stories evoluam o schema a partir de uma base controlada, 
 3. `supabase link` configurado por ambiente (variável `SUPABASE_PROJECT_REF` no `.env.local` do dev aponta para `development`; secret do CI/Vercel para `production`).
 4. Migration baseline `supabase/migrations/{ts}_baseline.sql` cria extensões necessárias (`pgcrypto`, `uuid-ossp`) e habilita `pgjwt` se necessário.
 5. `supabase db push` aplica baseline com sucesso tanto no projeto `development` quanto `production`.
-6. `.env.example` lista `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_PROJECT_REF` com placeholders e instruções para colar valores do projeto `development`. **`SUPABASE_SERVICE_ROLE_KEY` não entra no MVP** (ver Section 4 — no Epic 6 a variável é adicionada junto com a introdução de RLS).
+6. `.env.example` lista `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_PROJECT_REF` com placeholders e instruções para colar valores do projeto `development`. **`SUPABASE_SERVICE_ROLE_KEY` não entra no MVP** — e, por decisão do Epic 6 (ADR `docs/architecture/security-epic-6.md`), também não entra depois: a RLS é acompanhada de uma RPC `security definer`, não de Service Role (ver Section 4). O único env novo do Epic 6 é `RATE_LIMIT_PEPPER` (server-only, não privilegiado, Story 6.4).
 7. README da raiz atualizado com seção "Setup local" explicando: criar conta Supabase → pedir credenciais do projeto `development` (ou criar próprio) → preencher `.env.local` → rodar `pnpm install` → `pnpm dev`.
 
 #### Story 1.5 — GitHub Actions CI
