@@ -8,9 +8,10 @@
 
 No MVP a autorização era **application-layer** (Server Actions filtram por
 `auth.uid()`), sem RLS. O Epic 6 **adiciona** RLS como segunda barreira, sem
-remover os filtros de aplicação (NFR3, defense-in-depth): `profiles` já está com
-RLS ligada (Story 6.1, migration `20260719170252_profiles_rls.sql`); `links` e
-`link_clicks` seguem sem RLS até as stories 6.2/6.3. O ER abaixo
+remover os filtros de aplicação (NFR3, defense-in-depth): `profiles` (Story 6.1,
+migration `20260719170252_profiles_rls.sql`) e `links` (Story 6.2, migration
+`20260719171040_links_rls.sql`) já estão com RLS ligada; `link_clicks` segue sem
+RLS até a Story 6.3. O ER abaixo
 reflete o schema **real aplicado** (`profiles`, migration `20260614220038`) e o
 schema **planejado** (`links`, Story 3.1).
 
@@ -102,21 +103,48 @@ SECURITY` no mesmo arquivo (habilitar sem policy = lockout).
 - **App-layer intacta:** os filtros `.eq('id', user.id)` de `lib/actions/profile.ts`
   e do dashboard permanecem — a RLS soma, não substitui.
 
-### `links` e `link_clicks` — ainda sem RLS (MVP)
+### `links` — RLS **ligada** (Story 6.2, Epic 6)
 
-- **Escrita (`links`):** Server Actions (`createLink`/`updateLink`/`deleteLink`/
-  `toggleActive`/`reorderLinks`) filtram por `profile_id = auth.uid()`. Usuário A
-  não altera links de B.
-- **Leitura pública (`/@username`):** query filtra `is_active = true` e
-  `profile_id` do username resolvido. Links inativos nunca são expostos.
+Migration `20260719171040_links_rls.sql` — as 5 policies e `ENABLE ROW LEVEL SECURITY`
+no mesmo arquivo. Nomes conforme PRD Story 3.1 AC3 (L529).
+
+| Policy | Comando | Roles | Expressão |
+|---|---|---|---|
+| `links_select_public_active` | SELECT | `anon`, `authenticated` | `USING (is_active = true)` |
+| `links_select_own` | SELECT | `authenticated` | `USING (profile_id = (select auth.uid()))` |
+| `links_insert_own` | INSERT | `authenticated` | `WITH CHECK (profile_id = (select auth.uid()))` |
+| `links_update_own` | UPDATE | `authenticated` | `USING (profile_id = (select auth.uid()))` · `WITH CHECK (profile_id = (select auth.uid()))` |
+| `links_delete_own` | DELETE | `authenticated` | `USING (profile_id = (select auth.uid()))` |
+
+- **Duas policies de SELECT, combinadas por OR** (ambas PERMISSIVE). É o ponto central:
+  o dashboard lista os links do dono **sem** filtro de `is_active`
+  (`app/dashboard/links/page.tsx:18`, `lib/analytics/clicks.ts:59`), então uma policy
+  única `USING (is_active = true)` esconderia os links desativados **do próprio dono** —
+  o toggle viraria "o link sumiu". Resultado efetivo: `anon` vê só links ativos;
+  `authenticated` vê todos os próprios (ativos e inativos) **mais** os ativos de
+  terceiros (necessário para renderizar a página pública de outro usuário).
+- **`WITH CHECK` no UPDATE** valida a linha *resultante* — é o que impede "doar" um link
+  a outro perfil trocando `profile_id`.
+- **RETURNING exige policy de SELECT:** as actions fazem `.select(...)` após
+  UPDATE/DELETE (`lib/actions/links.ts:131`, `:198`, `:227`). `links_select_own` cobre —
+  inclusive no toggle que acabou de setar `is_active = false`.
+- **App-layer intacta:** os filtros `.eq('profile_id', user.id)` das Server Actions e o
+  `.eq('is_active', true)` de `lib/queries/public-page.ts` permanecem — a RLS soma.
 - **Sanitização de URL:** `sanitizeLinkUrl()` (Story 3.2) roda **antes** de qualquer
   INSERT/UPDATE — só `http(s)` chega ao DB.
+
+### `link_clicks` — ainda sem RLS (Story 6.3)
+
+- Autorização application-layer: `lib/analytics/clicks.ts` resolve primeiro os `link_id`
+  do próprio profile e só então lê a agregação restrita a esses ids.
+- A view `link_click_daily` ainda é legível por `anon` — vazamento ativo tratado na
+  Story 6.3 (ver inventário § 4/R3).
 
 ## Forward-looking (fora do Epic 3)
 
 | Entidade / mudança | Epic | Nota |
 |--------------------|------|------|
-| RLS + policies em `links` / `link_clicks` | Epic 6 | stories 6.2/6.3 — a RLS **soma** ao app-layer (NFR3), não o substitui. `profiles` (6.1) já entregue. |
+| RLS + policies em `link_clicks` | Epic 6 | Story 6.3 — a RLS **soma** ao app-layer (NFR3), não o substitui. `profiles` (6.1) e `links` (6.2) já entregues. |
 | `security_invoker` + revogação de `anon` na view `link_click_daily` | Epic 6 | Story 6.3 — vazamento ativo hoje (ver inventário § 4/R3). |
 
 > `link_clicks` (Epic 5, Story 5.1) já está entregue e documentada acima como
