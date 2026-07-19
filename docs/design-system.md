@@ -53,7 +53,7 @@ tema **sobrescreve** (em branco = herda o valor light).
 | `--color-muted` | `#f1f5f9` | `#1a2233` | `#f0e9dd` | Superfícies secundárias (chips, hover ghost) |
 | `--color-muted-fg` | `#475569` | `#94a3b8` | `#5c4f42` | Texto secundário (username, captions, hints) |
 | `--color-border` | `#e2e8f0` | `#243046` | `#e5dbc8` | Bordas de cards, inputs, divisores |
-| `--color-accent` | `#2563eb` | `#60a5fa` | `#b06046` | Cor da marca / ações primárias, focus ring |
+| `--color-accent` | `#2563eb` | `#60a5fa` | `#b35536` | Cor da marca / ações primárias, focus ring |
 | `--color-accent-fg` | `#ffffff` | `#0b1220` | `#ffffff` | Texto/ícone sobre `--color-accent` |
 | `--color-accent-soft` | `#dbeafe` | `#1e3a5f` | `#f4ddd0` | Realce suave de accent (badges, destaques) |
 | `--color-surface` | `= --color-bg` | `= --color-bg` | `#ffffff` | Superfície elevada (cards, toasts); difere no accent para contraste |
@@ -257,7 +257,7 @@ São **3 temas**, definidos por classe no root. Helpers puros em
 |------|--------|---------------|-------------|
 | **light** | `:root` (sem classe) | Claro, neutro, azul (`#2563eb`) | Default; leitura diurna, alto contraste |
 | **dark** | `theme-dark` | Escuro, azul suave (`#60a5fa`), sombras como borda | Baixa luz, redução de brilho |
-| **accent** | `theme-accent` | Marca quente, fundo areia (`#edd3a9`), terracota (`#b06046`), surface branca | Identidade de marca, visual mais expressivo |
+| **accent** | `theme-accent` | Marca quente, fundo areia (`#edd3a9`), terracota (`#b35536`), surface branca | Identidade de marca, visual mais expressivo |
 
 ### 4.1 Como o usuário seleciona
 
@@ -320,11 +320,15 @@ rendendo **3.12:1**, abaixo de 4.5:1 para texto normal — foi **corrigido na St
 O par é usado como **rótulo de texto** no `Button variant="primary"` (font-medium,
 14–15px), portanto rege-se por WCAG 1.4.3 (texto normal, 4.5:1), não por 1.4.11 (UI, 3:1).
 
-`--color-accent` do tema accent passou de `#d97757` → **`#b06046`** (escala RGB uniforme,
-k=0.81), preservando o matiz (H 14.8° → 14.7°) e elevando o par a **4.56:1**. O limiar do
-par em `tests/unit/a11y-contrast.test.ts` subiu de 3.0 para **4.5** nos 3 temas, de modo
-que a CI agora **barra regressão**. Focus ring (`accent` sobre `bg` `#edd3a9`) subiu de
-2.15:1 para **3.15:1**, passando a atender 1.4.11 (≥3:1) — antes não atendia.
+`--color-accent` do tema accent passou de `#d97757` → **`#b35536`**, elevando o par a
+**4.92:1**. O método é **redução de L em OKLCH mantendo C e H constantes** (L 67.2 → 56.0,
+C 0.1306 vs 0.1308 do original, H 38.7°): o croma perceptual da marca fica praticamente
+intacto (desvio 0.2%). Uma primeira iteração usou escala RGB uniforme (k=0.81, 4.56:1),
+que preserva o matiz **HSL** mas dessatura por construção — custava 15% do croma sem
+necessidade; o gate de design da 6.6 corrigiu o método. O limiar do par em
+`tests/unit/a11y-contrast.test.ts` subiu de 3.0 para **4.5** nos 3 temas, de modo que a CI
+agora **barra regressão**. Focus ring (`accent` sobre `bg` `#edd3a9`) subiu de 2.15:1 para
+**3.39:1**, passando a atender 1.4.11 (≥3:1) — antes não atendia.
 
 ---
 

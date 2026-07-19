@@ -79,7 +79,7 @@ Token surface (todos os 3 temas derivam destes nomes):
 |---|---|---|---|---|---|
 | `light` | `#FFFFFF` | `#0F172A` | `#2563EB` (azul calmo) | `#DBEAFE` | Default. Sombras `--shadow-sm/md`. |
 | `dark` | `#0B1220` | `#E5E7EB` | `#60A5FA` | `#1E3A5F` | Sem `box-shadow` (só `1px` de border em `--color-border`). |
-| `accent` | `#FAF7F2` (cream) | `#1A1410` | `#D97757` (amber-clay) | `#F4DDD0` | Tema "branded", contraste quente. |
+| `accent` | `#EDD3A9` (warm amber) | `#1A1410` | `#B35536` (deep terracotta) | `#F4DDD0` | Tema "branded", contraste quente. |
 
 **Aplicação:**
 - Tema é persistido em `profile.theme` (DB) e injetado via classe em `<html>`: `theme-light` (default, sem classe), `theme-dark`, `theme-accent`.

@@ -123,11 +123,16 @@ html.theme-accent,
   --color-muted: #f0e9dd;
   --color-muted-fg: #5c4f42;
   --color-border: #e5dbc8;
-  /* Story 6.6 — escurecido de #d97757 (3.12:1) para #b06046: accent-fg (#fff)
-     sobre accent passa a 4.56:1, atendendo WCAG 2.1 AA 1.4.3 para texto normal
-     (rótulo do Button primary). Escala RGB uniforme (k=0.81) preserva o matiz
-     (H 14.8° → 14.7°). Ver docs/design/system/project/colors_and_type.css. */
-  --color-accent: #b06046;
+  /* Story 6.6 — escurecido de #d97757 (3.12:1) para #b35536: accent-fg (#fff)
+     sobre accent passa a 4.92:1, atendendo WCAG 2.1 AA 1.4.3 para texto normal
+     (rótulo do Button primary), e o par accent/bg sobe a 3.39:1, atendendo
+     1.4.11 (focus ring, bordas de input).
+     Método: redução de L em OKLCH mantendo C e H constantes — L 67.2 → 56.0 com
+     C 0.1306 (vs 0.1308 do original, desvio 0.2%) e H 38.7°. A escala RGB
+     uniforme usada na primeira iteração (k=0.81) preservava o matiz HSL mas
+     DESSATURAVA por construção, custando 15% do croma da marca sem necessidade.
+     Ver docs/design/system/project/colors_and_type.css. */
+  --color-accent: #b35536;
   --color-accent-fg: #ffffff;
   --color-accent-soft: #f4ddd0;
   --color-surface: #ffffff;
