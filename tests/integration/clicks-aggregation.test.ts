@@ -1,11 +1,20 @@
-// Story 5.4 — teste de integração da agregação de cliques (view + helpers).
+// Story 5.4 / 6.3 — teste de integração da agregação de cliques (view + helpers).
 // Valida, contra o dev: contagem por link (incl. links com 0 cliques), série
-// diária contínua, recortes 7d/30d e isolamento por profile (authz app-layer).
+// diária contínua, recortes 7d/30d e isolamento por profile.
 // Requer SERVICE_ROLE_KEY para setup/teardown; sem o secret o bloco é skipado
 // (mesmo padrão de link-clicks.test.ts).
+//
+// Story 6.3 — os helpers passaram a receber um client AUTENTICADO, não o anônimo.
+// A view link_click_daily agora é `security_invoker = on` e o `anon` perdeu todos os
+// grants nela (fechava um vazamento: qualquer um com a anon key lia a agregação de
+// TODOS os perfis). O caminho real do produto sempre foi `authenticated` —
+// app/dashboard/analytics/page.tsx usa createServerClient() com cookie de sessão —
+// então este teste passou a refletir o caminho real. Com client anônimo os helpers
+// hoje retornam [] / zeros, por design.
 import { describe, it, expect, afterAll } from 'vitest';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { createAdminClient, createAnonClient, hasServiceRole } from './helpers/admin';
-import { uniqueTestUser } from './helpers/unique-user';
+import { uniqueTestUser, type TestUser } from './helpers/unique-user';
 import { deleteTestUsers } from './helpers/cleanup';
 import { bulkInsertClicks, clicksOnDay } from './helpers/seed-clicks';
 import { getClicksByLink, getDailyClicks } from '@/lib/analytics/clicks';
@@ -20,10 +29,13 @@ if (!hasServiceRole()) {
 
 suite('Story 5.4 — agregação de cliques (view + helpers)', () => {
   const admin = hasServiceRole() ? createAdminClient() : null;
-  const anon = hasServiceRole() ? createAnonClient() : null;
   const createdUserIds: string[] = [];
 
-  async function createUserWithProfile(): Promise<string> {
+  /**
+   * Cria o usuário e já devolve um client AUTENTICADO como ele (role `authenticated`),
+   * que é o que a view exige desde a Story 6.3.
+   */
+  async function createUserWithProfile(): Promise<{ id: string; as: SupabaseClient }> {
     const u = uniqueTestUser();
     const { data, error } = await admin!.auth.admin.createUser({
       email: u.email,
@@ -34,7 +46,18 @@ suite('Story 5.4 — agregação de cliques (view + helpers)', () => {
     expect(error).toBeNull();
     const userId = data.user!.id;
     createdUserIds.push(userId);
-    return userId;
+    return { id: userId, as: await signIn(u) };
+  }
+
+  /** Client com anon key + JWT do usuário → role Postgres `authenticated`. */
+  async function signIn(u: TestUser): Promise<SupabaseClient> {
+    const client = createAnonClient();
+    const { error } = await client.auth.signInWithPassword({
+      email: u.email,
+      password: u.password,
+    });
+    expect(error).toBeNull();
+    return client;
   }
 
   async function createLink(profileId: string, title: string, position: number): Promise<string> {
@@ -53,7 +76,7 @@ suite('Story 5.4 — agregação de cliques (view + helpers)', () => {
   });
 
   it('getClicksByLink: total por link, recortes 7d/30d, e links com 0 cliques', async () => {
-    const profileA = await createUserWithProfile();
+    const { id: profileA, as: asA } = await createUserWithProfile();
     const linkA1 = await createLink(profileA, 'Canal', 0);
     const linkA2 = await createLink(profileA, 'Sem cliques', 1);
 
@@ -65,7 +88,7 @@ suite('Story 5.4 — agregação de cliques (view + helpers)', () => {
       ...clicksOnDay(linkA1, 40, 1),
     ]);
 
-    const totals = await getClicksByLink(anon!, profileA);
+    const totals = await getClicksByLink(asA, profileA);
     // Ambos os links retornam, ordenados por position — incl. o de 0 cliques.
     expect(totals).toHaveLength(2);
 
@@ -81,7 +104,7 @@ suite('Story 5.4 — agregação de cliques (view + helpers)', () => {
   });
 
   it('getDailyClicks: série contínua com dias sem clique preenchidos com 0', async () => {
-    const profile = await createUserWithProfile();
+    const { id: profile, as } = await createUserWithProfile();
     const link = await createLink(profile, 'Canal', 0);
 
     await bulkInsertClicks(admin!, [
@@ -89,7 +112,7 @@ suite('Story 5.4 — agregação de cliques (view + helpers)', () => {
       ...clicksOnDay(link, 3, 2), // há 3 dias
     ]);
 
-    const series = await getDailyClicks(anon!, profile, 7);
+    const series = await getDailyClicks(as, profile, 7);
     expect(series).toHaveLength(7); // série contínua de 7 dias
     // Ordenada do mais antigo (índice 0) ao mais recente (índice 6 = hoje).
     expect(series[6].clicks).toBe(4); // hoje
@@ -102,8 +125,8 @@ suite('Story 5.4 — agregação de cliques (view + helpers)', () => {
   });
 
   it('isolamento por profile: A não vê cliques dos links de B', async () => {
-    const profileA = await createUserWithProfile();
-    const profileB = await createUserWithProfile();
+    const { id: profileA, as: asA } = await createUserWithProfile();
+    const { id: profileB, as: asB } = await createUserWithProfile();
     const linkA = await createLink(profileA, 'Link A', 0);
     const linkB = await createLink(profileB, 'Link B', 0);
 
@@ -112,25 +135,25 @@ suite('Story 5.4 — agregação de cliques (view + helpers)', () => {
       ...clicksOnDay(linkB, 0, 9),
     ]);
 
-    const totalsA = await getClicksByLink(anon!, profileA);
+    const totalsA = await getClicksByLink(asA, profileA);
     expect(totalsA).toHaveLength(1);
     expect(totalsA[0].link_id).toBe(linkA);
     expect(totalsA[0].total).toBe(2); // não soma os 9 cliques de B
 
-    const seriesA = await getDailyClicks(anon!, profileA, 30);
+    const seriesA = await getDailyClicks(asA, profileA, 30);
     expect(seriesA.reduce((s, p) => s + p.clicks, 0)).toBe(2);
 
     // Simetria: B só enxerga os próprios 9.
-    const totalsB = await getClicksByLink(anon!, profileB);
+    const totalsB = await getClicksByLink(asB, profileB);
     expect(totalsB).toHaveLength(1);
     expect(totalsB[0].total).toBe(9);
   });
 
   it('profile sem links: getClicksByLink=[] e getDailyClicks série de zeros', async () => {
-    const profile = await createUserWithProfile();
-    expect(await getClicksByLink(anon!, profile)).toEqual([]);
+    const { id: profile, as } = await createUserWithProfile();
+    expect(await getClicksByLink(as, profile)).toEqual([]);
 
-    const series = await getDailyClicks(anon!, profile, 7);
+    const series = await getDailyClicks(as, profile, 7);
     expect(series).toHaveLength(7);
     expect(series.every((p) => p.clicks === 0)).toBe(true);
   });
