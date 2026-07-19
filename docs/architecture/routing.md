@@ -174,18 +174,48 @@ e `/[username]` responderiam **sem** headers de segurança.
 **HSTS não é definido no app:** a Vercel já aplica `Strict-Transport-Security` em
 produção. Duplicar criaria duas fontes de verdade.
 
-### 6.4 CSP sem nonce — tradeoff assumido
+### 6.4 CSP sem nonce — escolha de simplicidade (não impossibilidade técnica)
 
-A CSP é **enforce** (não Report-Only) e **não usa nonce**. Motivo: um nonce muda a cada
-request, tornando a resposta não-cacheável — incompatível com headers estáticos e com o
-`revalidate` da página pública (NFR1). Nonce via middleware cobriria apenas `/dashboard/*`,
-criando duas CSPs divergentes para manter.
+A CSP é **enforce** (não Report-Only) e **não usa nonce**.
 
-**Consequência assumida:** `script-src` inclui `'unsafe-inline'`, exigido de qualquer forma
-pelo payload RSC inline do App Router (`self.__next_f.push`) e pelo script anti-flash do
-`ThemeProvider` (Story 4.3). A defesa contra XSS permanece app-layer (escaping do React +
-validação de entrada). A CSP ainda entrega `frame-ancestors`, `object-src`, `base-uri`,
-`form-action` e um `connect-src` restrito ao Supabase.
+> **Correção (gate Wave 4, issue #2).** A redação anterior desta seção justificava a
+> ausência de nonce com dois argumentos que **não se sustentam**, e ficam registrados
+> aqui porque num projeto didático uma justificativa errada ensina a coisa errada:
+>
+> 1. ❌ *"`'unsafe-inline'` é exigido de qualquer forma pelo App Router."* **Falso.**
+>    Nonce via middleware é padrão de **primeira classe** do Next: o framework gera o
+>    valor por request e o propaga para os próprios scripts inline do RSC. Os scripts
+>    do RSC e o anti-flash do `ThemeProvider` exigem `'unsafe-inline'` **porque não
+>    usamos nonce** — não porque o App Router obrigue.
+> 2. ❌ *"Um nonce quebraria o cache ISR de `/[username]`."* **Defende um cache que não
+>    existe.** A rota declara `revalidate = 60` mas responde `no-store` e builda como
+>    `ƒ` (débito **DEBT-001**, ver `technical-debt.md`). E `/dashboard/*` já é dinâmico
+>    e já passa pelo middleware. As duas superfícies que um nonce afetaria **já são
+>    dinâmicas hoje** — o custo de cache alegado é zero.
+
+**A justificativa verdadeira.** Um nonce muda a cada request, então não cabe em headers
+**estáticos** de `next.config.ts`. Implementá-lo exigiria mover a CSP para o middleware,
+cujo matcher é cirúrgico (`/dashboard/:path*`) — e aí, uma de três: `/[username]` ficaria
+sem CSP; manteríamos **duas policies divergentes**; ou alargaríamos o matcher para toda
+request, pagando invocação edge em toda visita anônima (§ 6.2).
+
+Optamos por **uma única fonte estática de headers**, simples de manter e sem divergência.
+É uma escolha de simplicidade proporcional a um MVP didático — legítima, e registrada
+como escolha, não como impossibilidade.
+
+**O preço, dito sem eufemismo:** `script-src 'unsafe-inline'` **não mitiga XSS** — um
+`<script>` injetado executa. O ganho real desta CSP está nos **outros** diretivos:
+`object-src 'none'` (plugins legados), `base-uri 'self'` (sequestro de URL relativa),
+`form-action 'self'` (exfiltração de credencial por form injetado), `frame-ancestors
+'none'` (clickjacking) e um `connect-src` restrito ao Supabase — nenhum deles depende do
+nonce. Contra o baseline (**ausência total de CSP**), é ganho líquido e não regressão.
+A defesa contra XSS permanece app-layer (escaping do React + validação de entrada).
+
+**Follow-up em aberto (sem custo de cache):** adotar nonce-via-middleware para
+`/dashboard/*` está sobre a mesa a qualquer momento, e passa a ser ainda mais natural
+se/quando **DEBT-001** for resolvido e `/[username]` for de fato para ISR — porque aí a
+separação "página pública estática com headers estáticos / dashboard dinâmico com nonce"
+fica limpa. Não implementado por escolha, não por impedimento.
 
 Diretivas cuja remoção quebraria a UI **silenciosamente** (mudar só com verificação de console):
 
