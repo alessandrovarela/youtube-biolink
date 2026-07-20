@@ -1,5 +1,8 @@
 // Story 2.9 — Auth guard via layout (architecture.md § 10.3.1).
-// Protege toda a árvore /dashboard/*. Sem middleware.ts no MVP (Epic 6).
+// Protege toda a árvore /dashboard/*. No MVP era a ÚNICA barreira (sem arquivo de
+// proxy/middleware na raiz). Desde a Story 6.5 o `proxy.ts` da raiz faz o mesmo guard
+// na edge — este layout NÃO foi removido: as duas camadas somam (defense-in-depth,
+// NFR3), e o layout é a autoritativa (mesmo runtime das queries). Ver proxy.ts.
 // Story 4.2 — topbar/nav coeso (Perfil ↔ Links + logout) + container central
 // respeitando --topbar-h e --max-dashboard.
 import { redirect } from 'next/navigation';

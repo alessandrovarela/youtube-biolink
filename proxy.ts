@@ -19,13 +19,13 @@
 //    [Story 6.5 AC4/AC5 · docs/architecture/routing.md]
 //
 // 2. ESTE GUARD SOMA, NÃO SUBSTITUI. `app/dashboard/layout.tsx` continua com
-//    `getUser()` + `redirect()`. O middleware é rápido e barato mas roda na edge
+//    `getUser()` + `redirect()`. O proxy é rápido e barato mas roda na edge
 //    e depende do matcher estar correto; o layout é autoritativo (mesmo runtime
 //    das queries). Defense-in-depth: nenhuma camada isolada basta. [AC3 · NFR3]
 //
 // 3. HEADERS DE SEGURANÇA NÃO MORAM AQUI. Ficam em `next.config.ts` (`headers()`),
 //    que cobre TODAS as rotas — inclusive a pública ISR e os assets — sem custo
-//    de invocação edge. Pôr CSP no middleware limitaria os headers ao matcher,
+//    de invocação edge. Pôr CSP no proxy limitaria os headers ao matcher,
 //    deixando `/`, `/login` e `/[username]` descobertos. [AC9 · ver next.config.ts]
 import { NextResponse, type NextRequest } from 'next/server';
 import { createServerClient } from '@supabase/ssr';

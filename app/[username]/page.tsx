@@ -15,7 +15,7 @@ export const revalidate = 60;
 // │ POR QUE UM generateStaticParams QUE RETORNA LISTA VAZIA (DEBT-001)           │
 // └──────────────────────────────────────────────────────────────────────────────┘
 // Sem esta função, `revalidate = 60` acima é INERTE. Não é bug do Supabase, nem
-// dos cookies, nem do middleware: no Next 16 uma rota com SEGMENTO DINÂMICO e
+// dos cookies, nem do proxy edge: no Next 16 uma rota com SEGMENTO DINÂMICO e
 // SEM `generateStaticParams` é classificada como `ƒ` (Dynamic) no build e
 // responde `Cache-Control: private, no-cache, no-store` — o `revalidate` do
 // módulo nunca chega a ser considerado.

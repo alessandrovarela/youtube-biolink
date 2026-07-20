@@ -9,7 +9,7 @@
 ## 1. Decisão
 
 A página pública de cada usuário é servida pela **rota dinâmica** `app/[username]/page.tsx`.
-Não há `middleware.ts` na raiz no MVP: o **App Router** resolve a colisão entre a rota
+Não há arquivo de proxy/middleware na raiz no MVP: o **App Router** resolve a colisão entre a rota
 dinâmica e as rotas estáticas internas por **precedência de segmento**, e a
 **reserved-list** (Story 2.3) impede que qualquer segmento interno seja registrado
 como username.
@@ -28,7 +28,8 @@ app/
 
 **Sem middleware rewrite.** [Source: architecture.md § 2.5, § 10.3]
 
-> **Atualizado pela Story 6.5 (Epic 6):** passou a existir um `middleware.ts` na raiz,
+> **Atualizado pela Story 6.5 (Epic 6):** passou a existir um `proxy.ts` na raiz
+> (criado como `middleware.ts`; renomeado em TD-6 — o Next 16 depreciou o nome antigo),
 > mas ele **não faz rewrite nem participa da resolução de rotas** — só auth guard e
 > refresh de sessão em `/dashboard/*`. A resolução continua 100% por precedência do
 > App Router + reserved-list. Ver § 6.
@@ -128,16 +129,22 @@ format-válidos. A precedência estática > dinâmica é assegurada pelo App Rou
 
 ---
 
-## 6. Middleware edge e headers de segurança (Story 6.5)
+## 6. Proxy edge e headers de segurança (Story 6.5)
 
-> **Atualiza as seções 1 e 3**, que afirmavam "não há `middleware.ts` na raiz no MVP".
-> Desde a Story 6.5 (Epic 6) **existe** `middleware.ts` — mas ele **não** faz rewrite
-> e **não** participa da resolução de rotas. A precedência descrita na § 2 e a
+> **Atualiza as seções 1 e 3**, que afirmavam "não há arquivo de proxy/middleware na
+> raiz no MVP". Desde a Story 6.5 (Epic 6) **existe** `proxy.ts` — mas ele **não** faz
+> rewrite e **não** participa da resolução de rotas. A precedência descrita na § 2 e a
 > reserved-list da § 4 continuam sendo os únicos mecanismos de roteamento.
+>
+> **Nome do arquivo (TD-6):** a Story 6.5 criou este arquivo como `middleware.ts`. O
+> Next 16.2.6 depreciou essa convenção em favor de `proxy.ts`, e a migração foi feita
+> como **rename puro** (mesmo matcher, mesma lógica; só o export mudou de `middleware`
+> para `proxy`). O **conceito** continua sendo o de um middleware de edge — inclusive o
+> `@supabase/ssr` chama seu padrão de refresh de "middleware pattern".
 
-### 6.1 O que o middleware faz (e o que não faz)
+### 6.1 O que o proxy faz (e o que não faz)
 
-`middleware.ts` na raiz tem **duas** responsabilidades, ambas restritas a `/dashboard/*`:
+`proxy.ts` na raiz tem **duas** responsabilidades, ambas restritas a `/dashboard/*`:
 
 1. **Auth guard edge** — sem usuário → `redirect('/login?next={pathname}')`, antes do render.
 2. **Refresh proativo de token** — padrão de middleware do `@supabase/ssr` (`getUser()` +
@@ -155,20 +162,20 @@ export const config = { matcher: ['/dashboard/:path*'] };
 **Regra a preservar:** nunca substituir por um matcher catch-all com negative
 lookahead (o padrão da doc do Next). A página pública é um **segmento raiz dinâmico**
 (`/[username]`) — um matcher permissivo a captura, tornando a resposta dinâmica
-(ferindo NFR1) e cobrando invocação edge em toda request pública. `tests/unit/middleware.test.ts`
+(ferindo NFR1) e cobrando invocação edge em toda request pública. `tests/unit/proxy.test.ts`
 falha se alguém introduzir `(?!` no matcher.
 
 Verificado em runtime: `/[username]`, `/_next/static/*`, `/login`, `/signup`,
-`/auth/callback`, `/health` e `/` **não** passam pelo middleware.
+`/auth/callback`, `/health` e `/` **não** passam pelo proxy.
 
-### 6.3 Headers de segurança moram em `next.config.ts`, não no middleware
+### 6.3 Headers de segurança moram em `next.config.ts`, não no proxy
 
 | Onde | O quê | Por quê |
 |------|-------|---------|
 | `next.config.ts` (`headers()`) | CSP, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy` | Cobre **todas** as rotas (inclusive a pública e os assets) sem custo de invocação edge |
-| `middleware.ts` | auth guard + refresh de sessão | Precisa do matcher cirúrgico |
+| `proxy.ts` | auth guard + refresh de sessão | Precisa do matcher cirúrgico |
 
-Se a CSP morasse no middleware, ficaria limitada ao matcher — `/`, `/login`, `/signup`
+Se a CSP morasse no proxy, ficaria limitada ao matcher — `/`, `/login`, `/signup`
 e `/[username]` responderiam **sem** headers de segurança.
 
 **HSTS não é definido no app:** a Vercel já aplica `Strict-Transport-Security` em
@@ -187,21 +194,41 @@ A CSP é **enforce** (não Report-Only) e **não usa nonce**.
 >    valor por request e o propaga para os próprios scripts inline do RSC. Os scripts
 >    do RSC e o anti-flash do `ThemeProvider` exigem `'unsafe-inline'` **porque não
 >    usamos nonce** — não porque o App Router obrigue.
-> 2. ❌ *"Um nonce quebraria o cache ISR de `/[username]`."* **Defende um cache que não
->    existe.** A rota declara `revalidate = 60` mas responde `no-store` e builda como
->    `ƒ` (débito **DEBT-001**, ver `technical-debt.md`). E `/dashboard/*` já é dinâmico
->    e já passa pelo middleware. As duas superfícies que um nonce afetaria **já são
->    dinâmicas hoje** — o custo de cache alegado é zero.
+> 2. ❌ *"Um nonce quebraria o cache ISR de `/[username]`."* Era falso **quando escrito**
+>    — a rota declarava `revalidate = 60` mas respondia `no-store` (débito DEBT-001).
+>
+> **Reviravolta (pós-epic, DEBT-001 resolvido).** O item 2 voltou a ser verdadeiro, e
+> agora é o argumento decisivo. A causa-raiz do DEBT-001 era outra que ninguém previu
+> (segmento dinâmico sem `generateStaticParams` é classificado `ƒ` no Next 16, e o
+> `revalidate` nunca chega a ser considerado). Com o fix, `/[username]` **é ISR de
+> verdade** — e nonce com cache são **mutuamente exclusivos**: o nonce fica assado no
+> HTML cacheado, de modo que ou o header muda por request e não casa (todo script
+> bloqueado), ou o header vem do cache e o nonce vira **constante pública compartilhada
+> por 60 s** — pior que não ter nonce, porque *aparenta* mitigar.
+>
+> Ou seja: o trade-off não foi só corrigido, ele **inverteu de lado**. A conclusão
+> (manter `'unsafe-inline'`) continua a mesma; o motivo é outro.
 
 **A justificativa verdadeira.** Um nonce muda a cada request, então não cabe em headers
-**estáticos** de `next.config.ts`. Implementá-lo exigiria mover a CSP para o middleware,
-cujo matcher é cirúrgico (`/dashboard/:path*`) — e aí, uma de três: `/[username]` ficaria
-sem CSP; manteríamos **duas policies divergentes**; ou alargaríamos o matcher para toda
-request, pagando invocação edge em toda visita anônima (§ 6.2).
+**estáticos** de `next.config.ts`. Implementá-lo exigiria mover a CSP para o proxy, cujo
+matcher é cirúrgico (`/dashboard/:path*`) — e aí, uma de três: `/[username]` ficaria sem
+CSP; manteríamos **duas policies divergentes**; ou alargaríamos o matcher para toda
+request, pagando invocação edge em toda visita anônima (§ 6.2). E, desde que
+`/[username]` virou ISM de fato, a rota de maior exposição é justamente a que **não pode**
+receber nonce sem perder o cache (ver reviravolta acima).
+
+Nonce apenas em `/dashboard/*` foi avaliado e recusado: funcionaria, mas criaria duas
+policies divergentes para proteger a superfície de **menor** exposição — atrás de auth,
+com todo conteúdo escapado pelo React e um único `dangerouslySetInnerHTML`, que é literal
+do próprio código com `JSON.stringify` —, continuando impossível na de **maior**.
 
 Optamos por **uma única fonte estática de headers**, simples de manter e sem divergência.
 É uma escolha de simplicidade proporcional a um MVP didático — legítima, e registrada
 como escolha, não como impossibilidade.
+
+**O que destravaria isto no futuro:** CSP por **hash** em vez de nonce (hashes são
+estáveis entre requests e portanto compatíveis com cache). Inviável hoje porque o payload
+RSC inline muda a cada build e a cada conteúdo.
 
 **O preço, dito sem eufemismo:** `script-src 'unsafe-inline'` **não mitiga XSS** — um
 `<script>` injetado executa. O ganho real desta CSP está nos **outros** diretivos:
