@@ -66,38 +66,61 @@ assertProductionEnv();
 
 // Story 6.5 — Headers de segurança formais (NFR4).
 //
-// POR QUE AQUI E NÃO NO MIDDLEWARE:
+// POR QUE AQUI E NÃO NO PROXY EDGE:
 // `headers()` do Next aplica os headers a TODAS as rotas no momento da resposta,
-// sem custo de invocação edge e sem interferir no cache ISR. O middleware
-// (middleware.ts) tem matcher cirúrgico em `/dashboard/:path*` — se a CSP
-// morasse lá, `/`, `/login`, `/signup` e a página pública `/[username]` ficariam
-// SEM headers de segurança. Separação: middleware = auth/sessão; next.config =
-// headers. [Story 6.5 AC9 + nota de decisão]
+// sem custo de invocação edge e sem interferir no cache ISR. O proxy edge
+// (proxy.ts) tem matcher cirúrgico em `/dashboard/:path*` — se a CSP morasse lá,
+// `/`, `/login`, `/signup` e a página pública `/[username]` ficariam SEM headers
+// de segurança. Separação: proxy = auth/sessão; next.config = headers.
+// [Story 6.5 AC9 + nota de decisão]
 //
-// POR QUE SEM NONCE — ESCOLHA DE SIMPLICIDADE, NÃO IMPOSSIBILIDADE TÉCNICA:
-// Nonce via middleware é padrão de PRIMEIRA CLASSE do Next: o framework gera o
-// valor por request e o propaga para os próprios scripts inline do RSC. Ou seja,
-// era perfeitamente viável aqui — optamos por não fazer.
+// ┌────────────────────────────────────────────────────────────────────────────────┐
+// │ POR QUE SEM NONCE — O TRADEOFF SE INVERTEU COM A CORREÇÃO DO DEBT-001 (TD-2)    │
+// └────────────────────────────────────────────────────────────────────────────────┘
+// O gate do Epic 6 registrou (TD-2) que a justificativa "nonce quebraria o cache"
+// era falsa, PORQUE naquele momento `/[username]` respondia `no-store` — não havia
+// cache para quebrar. A recomendação era reavaliar quando o DEBT-001 fosse
+// resolvido. Ele FOI resolvido (ver app/[username]/page.tsx), e a reavaliação
+// inverte a conclusão: agora o argumento do cache é VERDADEIRO, e mais forte do
+// que se supunha.
 //
-// O que É verdade: um nonce muda a cada request, então não cabe em headers
-// ESTÁTICOS de next.config. Implementá-lo significaria mover a CSP para o
-// middleware, cujo matcher é cirúrgico (`/dashboard/:path*`) — e aí ou a página
-// pública `/[username]` ficaria sem CSP, ou passaríamos a manter DUAS policies
-// divergentes, ou alargaríamos o matcher para toda request (custo de invocação
-// edge em toda visita anônima).
+// A razão é estrutural, não de conveniência. Um nonce só protege se for
+// IMPREVISÍVEL E ÚNICO POR REQUEST. Sob ISR:
+//   • O HTML é renderizado UMA vez e servido do cache por até 60s. O nonce fica
+//     ASSADO nos `<script nonce="…">` do HTML cacheado.
+//   • Se o header CSP fosse gerado por request (nonce novo a cada visita), ele não
+//     casaria com o nonce assado no HTML → TODO script bloqueado, página quebrada.
+//   • Se o header viesse do cache junto com o HTML, o nonce seria uma CONSTANTE
+//     pública compartilhada por todos os visitantes durante a janela de 60s — o que
+//     é PIOR que não ter nonce: aparenta mitigação e não mitiga nada.
+// Ou seja, na superfície que mais importa (`/[username]`, a única que renderiza
+// conteúdo controlado por terceiros), nonce e ISR são mutuamente exclusivos.
 //
-// Escolhemos uma única fonte estática de headers, simples de manter e sem
-// divergência. O PREÇO, dito sem eufemismo: `script-src 'unsafe-inline'` NÃO
-// mitiga XSS — um `<script>` injetado executa. O ganho real desta CSP está nos
-// OUTROS diretivos (`object-src 'none'`, `base-uri 'self'`, `form-action 'self'`,
-// `frame-ancestors 'none'`, `connect-src` restrito), que não dependem do nonce.
-// Contra o baseline desta branch — ausência TOTAL de CSP — é ganho líquido.
+// RESTARIA aplicar nonce só a `/dashboard/*`, que é dinâmico. Foi avaliado e
+// RECUSADO, por três razões medidas e não por preguiça:
+//   1. Exigiria DUAS policies divergentes (uma estática aqui, uma dinâmica no
+//      proxy). O browser intersecta CSPs múltiplas, então funcionaria — ao custo
+//      de duas fontes de verdade que apodrecem em ritmos diferentes.
+//   2. O `/dashboard/*` está atrás de autenticação e NÃO renderiza HTML de
+//      terceiros: todo conteúdo de usuário passa por escape do React. O único
+//      `dangerouslySetInnerHTML` do projeto (components/dashboard/theme-provider)
+//      injeta um literal do próprio código, com a classe de tema serializada por
+//      `JSON.stringify` — não há caminho de dado do usuário para dentro dele.
+//   3. Logo, o nonce protegeria a superfície de MENOR exposição, e continuaria
+//      impossível na de MAIOR.
 //
-// FOLLOW-UP REGISTRADO: adotar nonce-via-middleware para `/dashboard/*` é uma
-// opção aberta e barata; não há custo de cache a pagar, porque `/dashboard/*` já
-// é dinâmico e `/[username]` hoje responde `no-store` (débito de ISR — ver
-// docs/architecture/technical-debt.md § DEBT-001).
-// Ver docs/architecture/routing.md § 6.4 para o tradeoff completo.
+// O PREÇO, dito sem eufemismo e sem mudança desde a Story 6.5: `script-src
+// 'unsafe-inline'` NÃO mitiga XSS — um `<script>` injetado executa. O ganho real
+// desta CSP está nos OUTROS diretivos (`object-src 'none'`, `base-uri 'self'`,
+// `form-action 'self'`, `frame-ancestors 'none'`, `connect-src` restrito), que não
+// dependem do nonce. Contra o baseline — ausência TOTAL de CSP — é ganho líquido.
+//
+// O QUE DESTRAVARIA A DECISÃO (para quem revisitar): CSP baseada em HASH em vez de
+// nonce. Hashes são estáveis entre requests, então convivem com ISR. Hoje não é
+// viável porque o payload RSC inline (`self.__next_f.push`) muda a cada build E a
+// cada conteúdo renderizado — o hash mudaria por usuário. Se o Next passar a
+// expor os hashes dos seus scripts inline, esta decisão deve ser reaberta.
+// Ver docs/architecture/routing.md § 6.4 para o histórico do tradeoff.
 
 const isDev = process.env.NODE_ENV === 'development';
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? '';
@@ -110,9 +133,8 @@ const csp = [
   // 'unsafe-inline': o App Router injeta o payload RSC via <script> inline
   // (self.__next_f.push) e o ThemeProvider (Story 4.3) renderiza um script
   // inline síncrono anti-flash. Ambos são scripts inline: SEM NONCE eles exigem
-  // 'unsafe-inline'. COM nonce, não exigiriam — o Next propaga o nonce para os
-  // scripts do RSC. Estamos aqui por não usar nonce (ver cabeçalho), não porque
-  // o App Router obrigue.
+  // 'unsafe-inline'. Não usamos nonce porque ele é incompatível com o ISR de
+  // `/[username]` — ver o bloco TD-2 no cabeçalho para a análise completa.
   // 'unsafe-eval': só em dev — react-refresh/HMR do Next avalia código.
   `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ''}`,
 
