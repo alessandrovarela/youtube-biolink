@@ -7,6 +7,7 @@ import { createServerClient } from '@/lib/supabase';
 import { validateUsername, normalizeUsername } from '@/lib/validation/username';
 import { usernameErrorMessage, isValidEmail } from '@/lib/validation/messages';
 import { checkRateLimit, RATE_LIMIT_MESSAGE } from '@/lib/rate-limit';
+import { safeNextPath } from '@/lib/validation/next-path';
 import type { FormState } from './types';
 
 // Story 6.4 — rate limiting por IP (NFR18/FR21). O throttle é a PRIMEIRA coisa que
@@ -25,6 +26,20 @@ const MIN_PASSWORD = 8;
 function str(formData: FormData, key: string): string {
   const v = formData.get(key);
   return typeof v === 'string' ? v : '';
+}
+
+/**
+ * Origin da request corrente. Server Actions sempre enviam o header `Origin`
+ * (é parte da proteção CSRF do Next); o fallback por `host` cobre proxies que o
+ * removem. Usado para (a) montar links de retorno e (b) ancorar a validação de
+ * `?next=` — `safeNextPath` compara o origin resolvido contra ESTE valor.
+ */
+async function requestOrigin(): Promise<string> {
+  const h = await headers();
+  return (
+    h.get('origin') ??
+    (h.get('host') ? `${h.get('x-forwarded-proto') ?? 'http'}://${h.get('host')}` : '')
+  );
 }
 
 // ── Story 2.4 — Signup ────────────────────────────────────────────────
@@ -97,7 +112,19 @@ export async function signIn(_prev: FormState, formData: FormData): Promise<Form
   }
 
   revalidatePath('/', 'layout');
-  redirect('/dashboard');
+
+  // TD-7 — consumo do `?next=` que o proxy edge produz ao barrar uma rota
+  // protegida. Antes, o parâmetro era GERADO e nunca LIDO: quem tentava abrir
+  // `/dashboard/links` sem sessão era mandado para `/login?next=/dashboard/links`
+  // e, após entrar, caía em `/dashboard` — perdia o destino original.
+  //
+  // O valor vem de um campo de formulário, ou seja, é INPUT DO USUÁRIO e não pode
+  // ser usado cru num redirect (open redirect). Passa por `safeNextPath`, a MESMA
+  // função que o `/auth/callback` usa — endurecida no Epic 6 contra `//evil.com`,
+  // `/\evil.com`, URLs absolutas e esquemas (`javascript:`), e coberta por testes.
+  // Se `next` for ausente, inválido ou externo, o fallback é `/dashboard`.
+  const next = safeNextPath(str(formData, 'next'), await requestOrigin());
+  redirect(next ?? '/dashboard');
 }
 
 // ── Story 2.8 — Logout ────────────────────────────────────────────────
@@ -116,12 +143,8 @@ export async function requestPasswordReset(_prev: FormState, formData: FormData)
   const email = str(formData, 'email').trim().toLowerCase();
   if (!isValidEmail(email)) return { ok: false, error: 'E-mail inválido' };
 
-  // Origin da request para montar o link de retorno. Server Actions sempre
-  // enviam o header Origin (proteção CSRF do Next); fallback via host.
-  const h = await headers();
-  const origin =
-    h.get('origin') ??
-    (h.get('host') ? `${h.get('x-forwarded-proto') ?? 'http'}://${h.get('host')}` : '');
+  // Origin da request para montar o link de retorno.
+  const origin = await requestOrigin();
 
   const supabase = await createServerClient();
   // O link de recuperação passa pelo /auth/callback (troca o code por sessão de

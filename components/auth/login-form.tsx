@@ -8,7 +8,16 @@ import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 
-export function LoginForm({ confirmed, reset }: { confirmed: boolean; reset: boolean }) {
+export function LoginForm({
+  confirmed,
+  reset,
+  next,
+}: {
+  confirmed: boolean;
+  reset: boolean;
+  /** Destino pós-login vindo de `?next=` (gerado pelo proxy edge). Validado na action. */
+  next?: string;
+}) {
   const [state, action, pending] = useActionState(signIn, null);
 
   return (
@@ -18,6 +27,9 @@ export function LoginForm({ confirmed, reset }: { confirmed: boolean; reset: boo
         {confirmed && <p className="text-sm text-success">E-mail confirmado! Faça login.</p>}
         {reset && <p className="text-sm text-success">Senha redefinida! Faça login.</p>}
         <form action={action} className="flex flex-col gap-4">
+          {/* Carrega o destino original até a action, que o valida com safeNextPath
+              antes de redirecionar. Só é emitido quando existe. [TD-7] */}
+          {next && <input type="hidden" name="next" value={next} />}
           <Input label="E-mail" name="email" type="email" autoComplete="email" required />
           <Input
             label="Senha"
