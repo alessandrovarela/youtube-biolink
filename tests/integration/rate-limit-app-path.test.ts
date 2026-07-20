@@ -35,9 +35,22 @@ suite('Story 6.4 — rate limiting pelo CAMINHO DO APP (dev real)', () => {
   const touched: Array<[string, string]> = [];
 
   beforeAll(() => {
-    // O app NUNCA deve rodar sem pepper; garantimos um valor determinístico aqui para
-    // que o teste não dependa do .env.local da máquina.
-    process.env.RATE_LIMIT_PEPPER = 'pepper-de-integracao-determinístico';
+    // O app NUNCA deve rodar sem pepper; fixamos um valor aqui para que o teste não
+    // dependa do .env.local da máquina.
+    //
+    // 🔴 O SUFIXO ALEATÓRIO É O QUE TORNA ESTE ARQUIVO REEXECUTÁVEL. Antes o pepper era
+    // a constante 'pepper-de-integracao-determinístico', e o último teste do arquivo
+    // (vetor (b)) é o único que NÃO usa `freshIp()` — ele precisa do IP histórico
+    // 203.0.113.77. Pepper fixo + IP fixo = subject FIXO, compartilhado por toda
+    // execução da suíte. Como o bucket `login` tem janela de 900 s, duas execuções
+    // dentro de 15 minutos (ou duas em paralelo na CI) somavam no MESMO contador e a
+    // asserção `totalHits(...) === 1` via 2 → falha intermitente que sumia na
+    // re-execução seguinte. Diagnosticado a partir de uma falha real da suíte completa.
+    //
+    // Com o pepper único por execução, o subject derivado é único por execução, e o
+    // isolamento passa a valer para o arquivo inteiro — sem alterar o que o teste prova
+    // (o `forged` continua sendo a constante histórica exata, computada SEM pepper).
+    process.env.RATE_LIMIT_PEPPER = `pepper-de-integracao-${randomUUID()}`;
   });
 
   beforeEach(() => {
