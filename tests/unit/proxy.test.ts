@@ -1,4 +1,6 @@
-// Story 6.5 — Testes do middleware edge (AC12) e do matcher (AC4).
+// Story 6.5 — Testes do proxy edge (AC12) e do matcher (AC4).
+// TD-6: o arquivo era `middleware.ts`/`middleware.test.ts`; o Next 16 renomeou a
+// convencao para `proxy.ts`. Rename puro, mesma lógica testada.
 //
 // O matcher é o risco central desta story: um padrão permissivo captura a página
 // pública ISR `/[username]` (segmento raiz dinâmico) e a torna dinâmica, ferindo
@@ -35,7 +37,7 @@ function matcherToRegExp(pattern: string): RegExp {
 }
 
 async function isMatched(pathname: string): Promise<boolean> {
-  const { config } = await import('@/middleware');
+  const { config } = await import('@/proxy');
   return config.matcher.some((p) => matcherToRegExp(p).test(pathname));
 }
 
@@ -47,12 +49,12 @@ function requestFor(pathname: string, cookies?: Record<string, string>): NextReq
   return req;
 }
 
-describe('middleware — auth guard edge (AC2)', () => {
+describe('proxy — auth guard edge (AC2)', () => {
   it('redireciona para /login quando não há usuário na sessão', async () => {
     mockGetUser.mockResolvedValueOnce({ data: { user: null }, error: null });
 
-    const { middleware } = await import('@/middleware');
-    const response = await middleware(requestFor('/dashboard'));
+    const { proxy } = await import('@/proxy');
+    const response = await proxy(requestFor('/dashboard'));
 
     expect(response.status).toBe(307);
     const location = new URL(response.headers.get('location')!);
@@ -62,8 +64,8 @@ describe('middleware — auth guard edge (AC2)', () => {
   it('preserva o destino em ?next= para o pós-login', async () => {
     mockGetUser.mockResolvedValueOnce({ data: { user: null }, error: null });
 
-    const { middleware } = await import('@/middleware');
-    const response = await middleware(requestFor('/dashboard/links'));
+    const { proxy } = await import('@/proxy');
+    const response = await proxy(requestFor('/dashboard/links'));
 
     const location = new URL(response.headers.get('location')!);
     expect(location.pathname).toBe('/login');
@@ -76,8 +78,8 @@ describe('middleware — auth guard edge (AC2)', () => {
       error: null,
     });
 
-    const { middleware } = await import('@/middleware');
-    const response = await middleware(requestFor('/dashboard', { 'sb-access-token': 'valid' }));
+    const { proxy } = await import('@/proxy');
+    const response = await proxy(requestFor('/dashboard', { 'sb-access-token': 'valid' }));
 
     // NextResponse.next() → 200 sem redirect.
     expect(response.status).toBe(200);
@@ -87,14 +89,14 @@ describe('middleware — auth guard edge (AC2)', () => {
   it('usa getUser() (revalida e renova), não getSession()', async () => {
     mockGetUser.mockResolvedValueOnce({ data: { user: { id: 'user-1' } }, error: null });
 
-    const { middleware } = await import('@/middleware');
-    await middleware(requestFor('/dashboard'));
+    const { proxy } = await import('@/proxy');
+    await proxy(requestFor('/dashboard'));
 
     expect(mockGetUser).toHaveBeenCalledTimes(1);
   });
 });
 
-describe('middleware — matcher cirúrgico (AC4/AC5)', () => {
+describe('proxy — matcher cirúrgico (AC4/AC5)', () => {
   it('intercepta /dashboard e toda a subárvore', async () => {
     expect(await isMatched('/dashboard')).toBe(true);
     expect(await isMatched('/dashboard/links')).toBe(true);
@@ -127,7 +129,7 @@ describe('middleware — matcher cirúrgico (AC4/AC5)', () => {
   it('não usa matcher catch-all com negative lookahead', async () => {
     // Guarda de regressão: o padrão da doc do Next é justamente o que captura
     // `/[username]`. Se alguém colar aquele matcher aqui, este teste falha.
-    const { config } = await import('@/middleware');
+    const { config } = await import('@/proxy');
     for (const pattern of config.matcher) {
       expect(pattern).not.toContain('(?!');
       expect(pattern).toMatch(/^\/dashboard/);

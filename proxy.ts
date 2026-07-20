@@ -1,4 +1,10 @@
-// Story 6.5 — Middleware edge: auth guard + refresh proativo de token.
+// Story 6.5 — Proxy edge: auth guard + refresh proativo de token.
+//
+// NOME DO ARQUIVO (TD-6): era `middleware.ts`. O Next 16 renomeou a convenção para
+// `proxy.ts` e emitia um aviso de depreciação em todo build/dev. A migração é um
+// RENAME PURO — mesmo matcher, mesma lógica, mesmo guard, mesmo refresh de token —
+// e a única mudança de código é o nome do export (`middleware` → `proxy`), que o
+// Next exige casar com o nome do arquivo. Nenhuma diferença de comportamento.
 //
 // TRÊS PONTOS DE DESIGN QUE NÃO SÃO ACIDENTAIS:
 //
@@ -8,6 +14,8 @@
 //    que (a) transformaria a resposta ISR (`revalidate = 60`) em dinâmica,
 //    ferindo NFR1, e (b) cobraria invocação edge em toda request pública.
 //    Enumerar o que ENTRA é seguro; excluir o que sai não é.
+//    Desde a correção do DEBT-001 esse risco deixou de ser teórico: `/[username]`
+//    é `●` (ISR) de fato, e um matcher permissivo a devolveria para `ƒ`.
 //    [Story 6.5 AC4/AC5 · docs/architecture/routing.md]
 //
 // 2. ESTE GUARD SOMA, NÃO SUBSTITUI. `app/dashboard/layout.tsx` continua com
@@ -25,7 +33,7 @@ import { createServerClient } from '@supabase/ssr';
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   // O response é REATRIBUÍDO dentro de setAll (não mutado): o padrão do
   // @supabase/ssr exige recriar o NextResponse a partir do request já com os
   // cookies novos, senão o token renovado não chega ao browser nem ao RSC.
@@ -61,6 +69,10 @@ export async function middleware(request: NextRequest) {
   if (!user) {
     const url = new URL('/login', request.url);
     // Preserva o destino para o pós-login, espelhando o guard de layout.
+    // Desde o TD-7 este parâmetro é EFETIVAMENTE CONSUMIDO: `/login` o repassa ao
+    // form e a action `signIn` redireciona para lá após autenticar, validando o
+    // valor com `safeNextPath` (lib/validation/next-path.ts). Antes disso ele era
+    // gerado e ignorado — o usuário sempre caía em `/dashboard`.
     url.searchParams.set('next', request.nextUrl.pathname);
     return NextResponse.redirect(url);
   }
