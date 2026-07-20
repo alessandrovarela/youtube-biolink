@@ -214,7 +214,7 @@ A CSP é **enforce** (não Report-Only) e **não usa nonce**.
 matcher é cirúrgico (`/dashboard/:path*`) — e aí, uma de três: `/[username]` ficaria sem
 CSP; manteríamos **duas policies divergentes**; ou alargaríamos o matcher para toda
 request, pagando invocação edge em toda visita anônima (§ 6.2). E, desde que
-`/[username]` virou ISM de fato, a rota de maior exposição é justamente a que **não pode**
+`/[username]` virou ISR de fato, a rota de maior exposição é justamente a que **não pode**
 receber nonce sem perder o cache (ver reviravolta acima).
 
 Nonce apenas em `/dashboard/*` foi avaliado e recusado: funcionaria, mas criaria duas
@@ -238,11 +238,17 @@ RSC inline muda a cada build e a cada conteúdo.
 nonce. Contra o baseline (**ausência total de CSP**), é ganho líquido e não regressão.
 A defesa contra XSS permanece app-layer (escaping do React + validação de entrada).
 
-**Follow-up em aberto (sem custo de cache):** adotar nonce-via-middleware para
-`/dashboard/*` está sobre a mesa a qualquer momento, e passa a ser ainda mais natural
-se/quando **DEBT-001** for resolvido e `/[username]` for de fato para ISR — porque aí a
-separação "página pública estática com headers estáticos / dashboard dinâmico com nonce"
-fica limpa. Não implementado por escolha, não por impedimento.
+**Follow-up (reavaliado — a premissa caiu):** este parágrafo antes dizia que adotar
+nonce em `/dashboard/*` ficaria "ainda mais natural se/quando DEBT-001 for resolvido".
+**DEBT-001 foi resolvido** — e o efeito foi o oposto do previsto. Com `/[username]`
+sendo ISR de verdade, a separação "pública estática / dashboard com nonce" não fica
+limpa: ela deixa permanentemente sem nonce justamente a rota de **maior** exposição
+(anônima, renderizando `avatar_url` arbitrário), para proteger a de **menor** (atrás de
+auth, conteúdo escapado pelo React). Ver a "Reviravolta" na abertura desta seção.
+
+O caminho que destravaria de verdade é **CSP por hash**, não por nonce — hashes são
+estáveis entre requests e portanto compatíveis com cache. Inviável hoje porque o payload
+RSC inline muda a cada build e a cada conteúdo.
 
 Diretivas cuja remoção quebraria a UI **silenciosamente** (mudar só com verificação de console):
 
