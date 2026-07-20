@@ -1,0 +1,533 @@
+epic: EPIC-6
+title: "Revisão de DDL pelo @data-engineer — fechamento formal da AC11 da Story 6.3 (TD-3)"
+gate_agent: "@data-engineer (Dara)"
+date: "2026-07-19"
+branch: "feature/epic-6-security"
+base: main
+verdict: PASS_WITH_FINDINGS
+closes:
+  - "TD-3 (docs/qa/gates/epic-6-final-gate.yml § consolidated_open_debts.technical)"
+  - "issue #5 (docs/qa/gates/epic-6-wave-2-gate.yml) — aberta desde a Wave 2"
+  - "AC11 da Story 6.3 — revisão de DDL pelo especialista nomeado"
+documents:
+  - "TD-5 (divergência AC1 × bucket track_link) — ver § td_5 e docs/stories/6.4.story.md"
+
+# ════════════════════════════════════════════════════════════════════════════
+# MÉTODO
+# ════════════════════════════════════════════════════════════════════════════
+# A AC11 caiu no vão entre as Waves 1 e 2 (gate_agents diferentes) e o issue HIGH
+# da Wave 3 estava exatamente na DDL. Esta revisão parte do princípio de que o que
+# escapou aos gates anteriores é o que testes de COMPORTAMENTO não alcançam:
+# plano de query, escolha de índice, privilégio residual e semântica de catálogo.
+#
+# Por isso nada aqui foi avaliado por leitura. Cada afirmação — inclusive as que
+# dizem "está correto" — foi MEDIDA contra o banco `development` real
+# (PostgreSQL 17.6) via API de query do Supabase, com dataset sintético de
+# 500.000 link_clicks e 200.000 rate_limit_counters para que os planos fossem os
+# de um banco com volume, não os de um banco vazio. O dataset foi integralmente
+# removido ao final (contagens restauradas: link_clicks = 62).
+method:
+  catalog: "pg_proc · pg_policies · pg_class.reloptions · pg_indexes · information_schema.role_table_grants · pg_roles"
+  plans: "EXPLAIN (ANALYZE, BUFFERS) com `set local role authenticated` + request.jwt.claims — RLS ativa no plano"
+  volume: "500k link_clicks (2 anos, 3 links) e 200k rate_limit_counters — semeados, medidos e removidos"
+  scope_limit: >-
+    Somente o banco `development`. PRODUÇÃO NÃO FOI TOCADA nem sondada por esta
+    revisão. As afirmações sobre prod continuam sendo as predições registradas em
+    PRE-M7 do final gate — esta revisão não as converte em observação.
+
+# ════════════════════════════════════════════════════════════════════════════
+# ACHADOS
+# ════════════════════════════════════════════════════════════════════════════
+findings:
+
+  - id: DDL-1
+    severity: HIGH
+    status: CORRIGIDO
+    category: performance/modelagem
+    title: "A query de analytics era O(histórico), não O(janela) — e o modo de falha em escala é silencioso"
+    where: "supabase/migrations/20260702120000_link_click_daily.sql (Epic 5) — herdado, não introduzido pelo Epic 6"
+    what: >-
+      A view link_click_daily agrupa por `(date_trunc('day', lc.clicked_at))::date`.
+      `date_trunc(text, timestamptz)` é STABLE, não IMMUTABLE — o resultado depende do
+      TimeZone da sessão. Duas consequências: (1) a expressão NÃO é indexável, e o
+      planner tampouco consegue reescrever `day >= X` como range em `clicked_at`, de
+      modo que o índice (link_id, clicked_at DESC) da Story 5.1 fica inútil para o
+      recorte temporal; (2) a fronteira do dia passa a depender de uma configuração de
+      servidor, enquanto o lado TS (utcDaysAgo em lib/analytics/clicks.ts) computa dias
+      em UTC — acoplamento implícito e não declarado.
+    measured_before: >-
+      getDailyClicks (janela de 30 dias, 500k cliques, role authenticated):
+      Index Only Scan + Filter · Rows Removed by Filter: 480.045 ·
+      shared hit=503.272 buffers · Execution Time: 811,9 ms — para devolver 90 linhas.
+    measured_after: >-
+      Index Scan com o recorte de data DENTRO do Index Cond ·
+      Rows Removed by Filter: 0 · shared hit=19.640 buffers ·
+      Execution Time: 42,0 ms — as mesmas 90 linhas.
+      → 19,3× mais rápido, 25,6× menos I/O.
+    why_it_mattered: >-
+      Não era só lentidão. A role `authenticated` tem statement_timeout = 8s
+      (verificado em pg_roles). Extrapolando a medição, o dashboard estouraria o
+      timeout por volta de ~5M cliques. E lib/analytics/clicks.ts ENGOLE o erro
+      (`if (error || !data) return series`) — o dashboard não mostraria falha,
+      mostraria ZERO CLIQUES. Falha silenciosa indistinguível de "ninguém clicou".
+      Este é o tipo de defeito que só aparece com volume e que nenhum teste de
+      comportamento sobre 62 linhas jamais pegaria.
+    fix: >-
+      `(lc.clicked_at at time zone 'UTC')::date` — IMMUTABLE, indexável, e torna a
+      intenção de UTC EXPLÍCITA no schema em vez de herdada do ambiente. Mais índice
+      de expressão idx_link_clicks_link_day (link_id, ((clicked_at at time zone 'UTC')::date)).
+      Equivalência das duas expressões verificada linha a linha sob TimeZone=UTC:
+      0 divergências em 500.000 linhas. A mudança é semanticamente NEUTRA hoje.
+    migration: "20260719210000_ddl_review_hardening.sql § 1"
+
+  - id: DDL-2
+    severity: HIGH
+    status: CORRIGIDO
+    category: security/armadilha-de-manutenção
+    title: "CREATE OR REPLACE VIEW descarta `security_invoker` — a proteção da Story 6.3 é apagável por acidente"
+    what: >-
+      `CREATE OR REPLACE VIEW` **não preserva as reloptions da view**. Substituir
+      link_click_daily apaga `security_invoker = on` — exatamente o controle que o
+      bloco 3 da migration 20260719180000 introduziu para fechar o vazamento em que
+      qualquer portador da anon key lia a agregação de cliques de TODOS os perfis.
+      Sem security_invoker a view volta a executar com o privilégio do OWNER
+      (postgres, rolbypassrls = true) e a RLS de link_clicks deixa de alcançá-la.
+    how_found: >-
+      NÃO POR LEITURA — foi reproduzido acidentalmente ao aplicar o DDL-1. Após o
+      `create or replace view`, pg_class.reloptions voltou a NULL. Estado restaurado
+      imediatamente e confirmado (`{security_invoker=on}`).
+    why_it_matters: >-
+      É uma armadilha latente, não um defeito ativo: o estado atual está correto. Mas
+      qualquer manutenção futura da view — inclusive a legítima do DDL-1 — reabre o
+      vazamento em silêncio, sem erro, sem teste vermelho, sem sinal. O epic inteiro
+      criou uma regra para o caso análogo ("policies primeiro, ENABLE por último, no
+      mesmo arquivo"); o mesmo tipo de invariante existe aqui e não estava escrito.
+    fix: >-
+      A migration reafirma `alter view ... set (security_invoker = on)` e os grants
+      imediatamente após o `create or replace view`, no MESMO arquivo, e o registra
+      como regra para toda migration futura que toque nesta view.
+    migration: "20260719210000_ddl_review_hardening.sql § 2"
+    recommendation_for_qa: >-
+      Vale um teste de integração que asserta pg_class.reloptions da view — hoje a
+      única barreira contra a regressão é a disciplina de quem escreve a migration.
+
+  - id: DDL-3
+    severity: MEDIUM
+    status: CORRIGIDO
+    category: security/least-privilege
+    title: "O princípio de defesa em profundidade do epic foi aplicado a link_clicks e esquecido em profiles e links"
+    what: >-
+      O bloco (e) da migration 20260719180000 revogou insert/update/delete/truncate de
+      link_clicks com justificativa explícita e correta ("se um dia alguém adicionar
+      uma policy permissiva por engano, o privilégio ainda não estará lá"). O mesmo
+      raciocínio vale identicamente para profiles e links, e não tinha sido aplicado.
+    measured_before: |
+      profiles → anon:          DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE
+      profiles → authenticated: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE
+      links    → anon:          DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE
+      links    → authenticated: DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE
+    measured_after: |
+      profiles → anon:          SELECT
+      profiles → authenticated: SELECT,UPDATE
+      links    → anon:          SELECT
+      links    → authenticated: DELETE,INSERT,SELECT,UPDATE
+    severity_rationale: >-
+      MEDIUM e não HIGH porque a RLS hoje nega tudo isso — NÃO havia vulnerabilidade
+      ativa. O problema é de arquitetura de defesa: link_clicks tinha DUAS camadas e as
+      duas tabelas que guardam dados de usuário tinham UMA. O NFR3 promete defesa em
+      profundidade; ela estava incompleta exatamente onde mais importa. Nota específica:
+      TRUNCATE **não é filtrado por RLS** — era o único verbo do conjunto que a RLS não
+      conteria se o grant fosse alcançável.
+    derivation: >-
+      O privilégio mínimo foi derivado do código, arquivo a arquivo, não presumido:
+      profiles/anon → SELECT (checagem de username em lib/actions/auth.ts:67 e página
+      pública em lib/queries/public-page.ts:53); profiles/authenticated → SELECT+UPDATE
+      (lib/actions/profile.ts:37 e :65); INSERT é do trigger handle_new_user
+      (SECURITY DEFINER, owner postgres) e DELETE é do ON DELETE CASCADE de auth.users,
+      nenhum dos dois passa por grant de cliente. links/anon → SELECT
+      (lib/queries/public-page.ts:61); links/authenticated → SELECT+INSERT+UPDATE+DELETE
+      (lib/actions/links.ts). REFERENCES e TRIGGER não são usados por ninguém — ruído
+      do default do Supabase.
+    verification: "Suíte completa verde após o revoke (343 testes), incluindo as 3 suítes de RLS e os CRUDs de links e profile."
+    migration: "20260719210000_ddl_review_hardening.sql § 3"
+
+  - id: DDL-4
+    severity: LOW
+    status: CORRIGIDO
+    category: security/hardening
+    title: "`SET search_path = public` não neutraliza pg_temp nas funções SECURITY DEFINER"
+    what: >-
+      As 4 funções SECURITY DEFINER declaram `SET search_path = public` (confirmado em
+      pg_proc.proconfig). Está certo e é melhor que a média. Mas quando `pg_temp` não é
+      listado explicitamente, ele é implicitamente pesquisado ANTES de todos os outros
+      schemas para nomes de RELAÇÃO (tabelas, views, sequences) — só é ignorado para
+      funções e operadores. Ou seja, `= public` deixa o schema temporário do chamador
+      implícito e em primeiro lugar.
+    honest_assessment: >-
+      NÃO É VULNERABILIDADE EXPLORÁVEL HOJE, e é importante ser preciso sobre o motivo,
+      porque não é o search_path: todas as referências a relação dentro das 4 funções
+      são qualificadas por schema (public.links, public.link_clicks,
+      public.rate_limit_counters, public.profiles), e referência qualificada ignora o
+      search_path por completo. Este item é hardening estrutural, não correção de falha.
+    fix: >-
+      `set search_path = public, pg_temp` nas 4 funções — listar pg_temp por último move-o
+      da primeira para a última posição de busca, fechando a brecha estruturalmente em vez
+      de depender da disciplina de sempre qualificar. Recomendação do próprio manual do
+      Postgres para SECURITY DEFINER. Aplicado via ALTER FUNCTION (mexe só no proconfig,
+      não reescreve corpo nenhum). Zero mudança de comportamento — verificado: RPC
+      record_link_click continua retornando true e a suíte segue verde.
+    migration: "20260719210000_ddl_review_hardening.sql § 4"
+
+  - id: DDL-5
+    severity: LOW
+    status: DOCUMENTADO
+    category: performance/modelagem
+    title: "getClicksByLink lê o histórico diário INTEIRO para calcular total/last7/last30"
+    what: >-
+      lib/analytics/clicks.ts:getClicksByLink consulta link_click_daily com
+      `.in('link_id', linkIds)` e SEM recorte de data, trazendo uma linha por
+      (link, dia) desde sempre, para então somar em TypeScript. Medido: 2.193 linhas
+      para 3 links em 2 anos. Cresce linearmente com (nº de links × idade da conta).
+    why_not_fixed_here: >-
+      É correção de APLICAÇÃO, não de DDL — fora do escopo desta revisão e do mandato
+      da AC11. Também não é urgente: o DDL-1 já derrubou o custo do lado do banco.
+    risk: >-
+      Além do payload, há um limite silencioso: o PostgREST pode truncar respostas
+      grandes (db-max-rows). Se um dia truncar, os totais do dashboard ficam
+      SUBCONTADOS sem erro nenhum — mesma família de falha silenciosa do DDL-1.
+    recommendation: >-
+      @dev/@architect — ou aplicar `.gte('day', ...)` com a maior janela realmente
+      exibida (30 dias) e derivar `total` de uma agregação separada, ou expor uma RPC
+      que devolva os 3 números já somados no banco.
+
+  - id: DDL-6
+    severity: LOW
+    status: DOCUMENTADO
+    category: performance/escrita
+    title: "idx_link_clicks_link_clicked_at ficou redundante — índice a mais na tabela de maior taxa de inserção"
+    what: >-
+      Com idx_link_clicks_link_day (link_id, (dia UTC)) criado pelo DDL-1, o índice
+      idx_link_clicks_link_clicked_at (link_id, clicked_at DESC) não serve mais nenhuma
+      query conhecida: nada consulta link_clicks cru fora da view, e o ON DELETE CASCADE
+      de links precisa apenas de link_id como coluna líder — que o índice novo também
+      oferece. Manter os dois dobra o custo de manutenção de índice em cada INSERT, na
+      tabela que mais recebe escrita do produto.
+    why_not_fixed_here: >-
+      DELIBERADAMENTE NÃO REMOVIDO. Dropar índice é decisão de modelagem com efeito
+      irreversível na janela em que se descobre que alguma query não mapeada dependia
+      dele, e as Stories 5.1/5.4 documentam esse índice nominalmente. Merece sign-off do
+      @architect, não uma decisão lateral num passe de limpeza de débito de severidade
+      baixa. O custo de mantê-lo é performance de escrita, não correção.
+    recommendation: "@architect — avaliar o DROP numa story de manutenção, depois que o DDL-1 estiver em produção e observado."
+
+  - id: DDL-7
+    severity: INFO
+    status: DOCUMENTADO
+    category: modelagem
+    title: "link_clicks.user_agent_hash é coluna morta"
+    what: >-
+      Criada na Story 5.1 para "dedup futura". A RPC record_link_click — hoje a ÚNICA
+      rota de escrita da tabela — não a preenche, então ela é NULL em 100% das linhas
+      gravadas pelo caminho de produção. Nenhuma query a lê.
+    recommendation: >-
+      Sem ação no Epic 6. Registrar para que uma story futura decida entre implementar
+      a dedup ou remover a coluna. Coluna morta em tabela append-only de alto volume
+      custa espaço em cada linha e ensina o leitor a esperar um recurso que não existe.
+
+# ════════════════════════════════════════════════════════════════════════════
+# VERIFICADO E CORRETO — registrado para não obrigar o próximo revisor a refazer
+# ════════════════════════════════════════════════════════════════════════════
+# Uma revisão que só lista defeitos força quem vier depois a reconferir tudo o que
+# já estava certo. Estes pontos foram investigados COM a suspeita explícita levantada
+# no mandato desta revisão, e a suspeita NÃO se confirmou.
+verified_correct:
+
+  - topic: "Sargabilidade e `(select auth.uid())`"
+    result: CORRETO
+    evidence: >-
+      As 6 policies que usam auth.uid() empregam `(select auth.uid())` — pg_policies
+      confirma o InitPlan. Avaliado UMA vez por query, não por linha. Este é o erro de
+      performance de RLS nº 1 no Supabase e o epic NÃO o cometeu, nas três tabelas.
+
+  - topic: "Índice sustentando o EXISTS de link_clicks_select_own"
+    result: CORRETO — a preocupação não se confirma
+    evidence: >-
+      A suspeita natural é que o EXISTS em `links` vire SubPlan correlacionado por
+      linha de link_clicks. MEDIDO: não vira. O planner o resolve como `hashed SubPlan`
+      executado UMA vez — "Seq Scan on links l ... actual rows=3 loops=1" sobre 500.000
+      linhas de link_clicks. Custo O(1) no tamanho de link_clicks. E o índice que o
+      sustentaria — idx_links_profile_position (profile_id, position) — existe e tem
+      profile_id como coluna LÍDER, então a hipótese "falta índice em links.profile_id"
+      é falsa: ele está coberto.
+
+  - topic: "Ordem da PK de rate_limit_counters (bucket, subject, window_start)"
+    result: CORRETO — ordem certa para o padrão de acesso
+    evidence: >-
+      O predicado do limiter é `bucket = ? and subject = ? and window_start > ?` — um
+      prefixo exato da PK. MEDIDO com 200.000 linhas: Index Scan using
+      rate_limit_counters_pkey, Index Cond com as 3 colunas, 4 buffers, 2,7 ms.
+      (Com a tabela pequena o planner prefere idx_rate_limit_window_start e filtra;
+      migra para a PK sozinho quando o volume justifica. Correto nos dois regimes.)
+
+  - topic: "Housekeeping faz seq scan?"
+    result: NÃO — usa índice
+    evidence: >-
+      `Index Scan using idx_rate_limit_window_start`, Index Cond no range de idade.
+      O índice existe exatamente para isso e cumpre o papel.
+
+  - topic: "Volatilidade das funções"
+    result: CORRETO
+    evidence: >-
+      As 3 funções que escrevem são VOLATILE (pg_proc.provolatile = 'v'). Nenhuma está
+      marcada STABLE ou IMMUTABLE indevidamente — um STABLE em check_rate_limit
+      permitiria ao planner cachear o resultado dentro de uma query e furar a contagem.
+
+  - topic: "Contenção do pg_advisory_xact_lock"
+    result: CORRETO — desenho adequado
+    evidence: >-
+      Lock por (bucket, subject), escopo de transação. No caminho do PostgREST cada RPC
+      é sua própria transação, então dura microssegundos. Serializa DE PROPÓSITO os
+      cliques de um MESMO link — é o que torna check-and-increment atômico. Não há
+      contenção entre links diferentes nem entre usuários diferentes. Colisão de hash
+      (hashtextextended → bigint) causaria serialização espúria entre duas chaves
+      distintas: probabilidade desprezível e consequência é latência, nunca contagem
+      errada.
+
+  - topic: "Owner das funções SECURITY DEFINER tem BYPASSRLS"
+    result: CONFIRMADO EM DEVELOPMENT
+    evidence: >-
+      Todas as 4 funções têm owner `postgres`, com rolbypassrls = true (pg_roles). É a
+      premissa de que todo o rate limiting depende. Em development é FATO observado.
+    caveat: >-
+      Em PRODUÇÃO continua sendo predição — esta revisão não sondou prod e não pretende
+      substituir o PRE-M7 do final gate.
+
+  - topic: "search_path das SECURITY DEFINER (estado inicial)"
+    result: "Presente em todas as 4 — ver DDL-4 para o refinamento"
+    evidence: "pg_proc.proconfig = ['search_path=public'] em record_link_click, check_rate_limit, check_app_rate_limit e handle_new_user."
+
+# ════════════════════════════════════════════════════════════════════════════
+# TD-5 — RECONCILIAÇÃO DE AC (não é defeito de DDL; é defeito de TEXTO)
+# ════════════════════════════════════════════════════════════════════════════
+td_5:
+  status: DOCUMENTADO — aguarda emenda do @po
+  severity: low
+  process_note: >-
+    Pela story-lifecycle.md, ACs são de @po. O texto da AC NÃO foi alterado por esta
+    revisão. O registro completo foi escrito em docs/stories/6.4.story.md, em seção
+    própria e assinada, FORA do texto das ACs.
+  reproduced: >-
+    Chamada real a record_link_click no banco development produziu a linha:
+    bucket='track_link', subject='81645bbb-f501-442a-bcb3-7c8cf777d5a9' — o link_id em
+    uuid, não um digest 64-hex. Os demais baldes (signup/login/reset/track) gravam
+    exclusivamente digests 64-hex, verificado por regex sobre toda a tabela.
+  verdict: "A AC está errada; a implementação está certa."
+  rationale:
+    - >-
+      O balde track_link não existia quando a AC1 foi escrita. Ele nasceu da Emenda 1
+      do ADR-001 § 6, que moveu o teto por link para DENTRO de record_link_click — a
+      mudança que fechou o vetor de click inflation provado pelo gate da Wave 2. A AC1
+      descreve o desenho ANTERIOR à emenda.
+    - >-
+      A RPC não tem acesso ao que a AC pede. O digest 64-hex é derivado no app a partir
+      de SHA-256(pepper + IP); dentro do banco não existe IP (quem abre a conexão é a
+      função da Vercel, cujo IP de egresso colapsaria todo o tráfego num balde global).
+      A RPC conhece exclusivamente o p_link_id.
+    - >-
+      Cumprir a AC1 literalmente exigiria que o app passasse o subject — que é
+      precisamente o que o hardening da Wave 3 PROIBIU (check_app_rate_limit recusa
+      'track_link' com 22023), porque subject escolhido pelo chamador reabre o vetor de
+      supressão de analytics. A AC1 literal e a correção do issue HIGH da Wave 3 são
+      mutuamente incompatíveis.
+    - >-
+      Não há violação de NFR19. O NFR19 proíbe IP RAW PERSISTIDO. link_id é uuid gerado
+      pelo banco e público por design (policy links_select_public_active o expõe a
+      qualquer anônimo): não é PII nem derivado de PII. A AC17 ("Sem IP raw persistido
+      em lugar nenhum") está SATISFEITA — a divergência é só com a cláusula "sempre" da
+      AC1.
+    - >-
+      Hashear o uuid seria pior: o link_id já é público, então o digest não esconderia
+      nada, e destruiria a auditabilidade (hoje se olha uma linha track_link e se sabe a
+      qual link ela pertence — sem isso, diagnosticar subcontagem em produção fica cego).
+  action: "@po (Pax) — aplicar a emenda proposta ao texto da AC1 (texto sugerido em docs/stories/6.4.story.md)."
+
+# ════════════════════════════════════════════════════════════════════════════
+# ESTABILIDADE DA SUÍTE DE INTEGRAÇÃO (achado não catalogado — registrado aqui)
+# ════════════════════════════════════════════════════════════════════════════
+test_stability:
+  status: CORRIGIDO
+  severity: MEDIUM
+  reported_symptom: "Timeouts de 5000ms na suíte de integração que desaparecem na re-execução, agravados por execução paralela."
+
+  root_cause_1:
+    title: "testTimeout global de 5000ms para testes que fazem dezenas de round-trips de rede"
+    diagnosis: >-
+      O vitest.config.ts não declarava testTimeout, então valia o default de 5000 ms
+      para TODA a suíte — inclusive para testes de integração contra o Supabase
+      `development` REMOTO. Confirmado empiricamente (um teste de 6 s falha com
+      "Test timed out in 5000ms"). Durações REAIS medidas numa execução VERDE:
+      rate-limit "61 chamadas DIRETAS à RPC" 10.709 ms · rate-limit-app-path "bucket
+      track chaveia por (ip,link)" 9.242 ms · "cada bucket da allowlist" 2.225 ms ·
+      "(a) SUPRESSÃO DE ANALYTICS" 2.067 ms. Testes de 2 a 10 s contra um teto de 5 s:
+      não era margem, era sorteio.
+    note: >-
+      Os testes de 9-10 s passavam porque a duração exibida inclui hooks, que têm
+      hookTimeout separado (default 10 s) — ou seja, a suíte estava espremida contra
+      DOIS limites ao mesmo tempo.
+    not_a_regression: >-
+      A fragilidade sempre existiu; só ficou visível quando o Epic 6 quase dobrou o
+      número de testes que falam com o banco.
+    fix: >-
+      vitest.config.ts passa a declarar dois projetos: `unit` (testTimeout 5.000 ms,
+      INALTERADO — nada unitário deve chegar perto disso) e `integration`
+      (testTimeout 30.000 ms, hookTimeout 30.000 ms, ~3× o pior caso observado).
+      Os unitários NÃO foram afrouxados.
+    pitfall_recorded: >-
+      Um `include` no nível raiz é herdado pelos dois projetos e faz cada arquivo ser
+      coletado DUAS VEZES (sintoma observado: a suíte "dobrou" de 343 para 686 testes).
+      O include vive apenas dentro de cada projeto, e isso está comentado no arquivo.
+
+  root_cause_2:
+    title: "🔴 Teste de integração genuinamente flaky por falta de isolamento — o achado real"
+    how_found: >-
+      Surgiu numa das execuções de validação: rate-limit-app-path.test.ts › "o subject
+      forjado com pepper VAZIO não é o subject do app". Passava 4/4 isolado e 3/3 em
+      par com rate-limit.test.ts; só falhava sob a suíte completa.
+    diagnosis: >-
+      O arquivo tem um helper `freshIp()` cujo próprio comentário diz "IP único por
+      teste — isola execuções concorrentes e reexecuções da suíte". O teste que falha é
+      o ÚNICO do arquivo que NÃO o usa: ele precisa do IP histórico 203.0.113.77. Com o
+      pepper também fixo ('pepper-de-integracao-determinístico'), o subject derivado era
+      FIXO e compartilhado por toda execução da suíte. Como o bucket `login` tem janela
+      de 900 s, duas execuções dentro de 15 minutos — ou duas em paralelo na CI —
+      somavam no MESMO contador, e a asserção `totalHits(...) === 1` via 2.
+    fix: >-
+      O pepper do arquivo passa a ter sufixo aleatório por execução
+      (`pepper-de-integracao-${randomUUID()}`), tornando o subject derivado único por
+      execução. O que o teste PROVA não muda: `forged` continua sendo a constante
+      histórica exata computada SEM pepper, e a asserção `real !== forged` segue valendo.
+
+  retry_rejected:
+    decision: "Avaliado e REVERTIDO — retry NÃO foi adotado."
+    why: >-
+      `retry: 1` foi testado e se mostrou ATIVAMENTE NOCIVO nesta suíte. Estes testes
+      NÃO são idempotentes: asseguram valores EXATOS de contadores persistentes
+      (`expect(await totalHits('login', subject)).toBe(1)`) e a própria ação testada
+      incrementa esse contador. A segunda tentativa roda contra o estado que a primeira
+      deixou — `toBe(1)` passa a ver 2 — então o retry converte falha transitória em
+      falha GARANTIDA e nunca resgata nada. Observado na prática: o teste do vetor (b)
+      falhou nas DUAS tentativas. A cura correta para instabilidade aqui é ISOLAMENTO
+      (chaves únicas por execução), não repetição; retry sobre estado compartilhado
+      esconde defeito de isolamento em vez de corrigi-lo.
+
+  stability_result:
+    runs: "6 execuções consecutivas VERDES, sem intervalo de descanso entre elas"
+    full_suite: "3/3 — 343 passed | 1 skipped (44 arquivos) · 34,1 s / 35,9 s / 34,8 s"
+    integration_only: "3/3 — 97 passed | 1 skipped (17 arquivos) · 34,5 s / 34,1 s / 34,6 s"
+    note: >-
+      Execuções encadeadas sem pausa são o cenário de MAIOR pressão para a colisão de
+      janela de 900 s descrita em root_cause_2 — foi exatamente assim que a falha
+      original apareceu, e é assim que ela deixou de aparecer.
+
+# ════════════════════════════════════════════════════════════════════════════
+gates_run:
+  typecheck: "PASS — tsc --noEmit limpo"
+  lint: "PASS — eslint sem saída"
+  test: "PASS — 343 passed | 1 skipped, 3 execuções consecutivas"
+  test_integration: "PASS — 97 passed | 1 skipped, 3 execuções consecutivas"
+  migration_applied: "PASS — supabase db push em DEVELOPMENT. Produção NÃO tocada."
+  catalog_post_migration: >-
+    PASS — reloptions da view = {security_invoker=on}; proconfig das 4 funções =
+    'search_path=public, pg_temp'; grants reduzidos ao mínimo derivado do código;
+    record_link_click retorna true (RPC funcional após o revoke e a troca de proconfig).
+  data_restored: "PASS — dataset sintético removido; link_clicks de volta a 62 linhas."
+
+baseline_note: >-
+  A baseline de testes do final gate era 333. Esta revisão mediu 343. A diferença NÃO
+  vem daqui: são as 10 asserções dos commits 4c66a25 (DEBT-006, proxy.ts) e 96116a3
+  (DEBT-007, consumo do ?next=) feitos em paralelo por outro agente na mesma branch.
+  Verificado por diff das listas de arquivos de teste antes e depois da minha mudança:
+  conjuntos IDÊNTICOS (44 arquivos), nenhuma coleta duplicada.
+
+files_changed:
+  - "supabase/migrations/20260719210000_ddl_review_hardening.sql (novo — migration aditiva e idempotente)"
+  - "vitest.config.ts (dois perfis de timeout; unitários inalterados)"
+  - "tests/integration/rate-limit-app-path.test.ts (isolamento do pepper por execução)"
+  - "docs/stories/6.4.story.md (registro do TD-5 — fora do texto das ACs)"
+  - "docs/qa/gates/epic-6-ddl-review.yml (este relatório)"
+
+not_touched:
+  - "middleware.ts / proxy.ts, next.config.ts, app/ — outro agente na mesma branch"
+  - "docs/architecture/technical-debt.md, docs/architecture/routing.md — idem"
+  - "As 5 migrations do Epic 6 — nenhuma reescrita (precedente das Stories 6.3 e 6.4)"
+  - "PRODUÇÃO — não tocada e não sondada"
+
+# ════════════════════════════════════════════════════════════════════════════
+decision: >-
+  PASS_WITH_FINDINGS — a AC11 da Story 6.3 está formalmente FECHADA, e o TD-3 pode ser
+  encerrado.
+
+  A DDL do Epic 6 é, no essencial, boa DDL de segurança: as policies usam
+  `(select auth.uid())` nas três tabelas (o erro nº 1 de RLS no Supabase, evitado),
+  as funções SECURITY DEFINER têm search_path declarado, revoke de PUBLIC e grant
+  mínimo, a atomicidade "policies primeiro, ENABLE por último" foi respeitada em todas
+  as migrations, e o desenho do advisory lock para tornar check-and-increment atômico
+  está correto. Nada do que o mandato desta revisão levantou como suspeita de
+  performance de policy se confirmou: o EXISTS de link_clicks_select_own resolve como
+  hashed SubPlan de execução única, a PK de rate_limit_counters está na ordem certa
+  para o padrão de acesso real, e o housekeeping usa índice.
+
+  O que a revisão encontrou está quase todo FORA do que os gates anteriores podiam ver,
+  e isso valida a existência da AC11. Os dois achados HIGH têm o mesmo formato e são o
+  motivo de esta revisão não ter sido dispensável:
+
+  (1) A query de analytics era O(histórico) por causa de uma escolha de expressão feita
+  no Epic 5 — date_trunc é STABLE, logo não indexável, logo o índice existente não
+  servia ao recorte temporal. Com 500k cliques: 812 ms, 480.045 linhas descartadas por
+  filtro, para devolver 90. Nenhum teste de comportamento sobre 62 linhas veria isso, e
+  o modo de falha em escala é o pior possível: a role authenticated tem
+  statement_timeout de 8 s e o app ENGOLE o erro, então o dashboard não mostraria falha
+  — mostraria zero cliques. Corrigido, medido, 19,3× mais rápido.
+
+  (2) CREATE OR REPLACE VIEW apaga security_invoker. Descobri isso porque aconteceu
+  COMIGO ao aplicar a correção (1): reabri, por alguns segundos e sem nenhum sinal, o
+  exato vazamento que a Story 6.3 existiu para fechar. É uma armadilha latente que
+  qualquer manutenção futura da view dispara em silêncio. O estado está correto e a
+  regra agora está escrita na migration — mas recomendo ao @qa uma asserção de
+  catálogo, porque hoje a única barreira é a disciplina de quem escreve a próxima
+  migration.
+
+  O achado MEDIUM é de coerência: o epic formulou o argumento certo para revogar grants
+  redundantes em link_clicks e não o aplicou a profiles e links, que continuavam com
+  DELETE/INSERT/UPDATE/TRUNCATE para anon — inertes sob RLS, mas TRUNCATE em particular
+  não é filtrado por RLS. Agora as três tabelas têm as duas camadas que o NFR3 promete.
+
+  Sobre o TD-5: a AC é que está errada, e por um motivo mais forte do que "o texto
+  envelheceu". Cumprir a AC1 literalmente exigiria que o app escolhesse o subject do
+  balde track_link, que é exatamente o que o hardening da Wave 3 proibiu para fechar o
+  vetor de supressão de analytics. A AC1 literal e a correção do issue HIGH da Wave 3
+  não podem coexistir. Não editei o texto — isso é de @po —, mas deixei o registro e a
+  emenda proposta na story.
+
+  Sobre a suíte: o timeout de 5000 ms era real e está corrigido com dois perfis
+  (unitários intocados). Mas a investigação rendeu mais do que o sintoma relatado — a
+  suíte tinha um teste genuinamente flaky, o único de seu arquivo que não usava o
+  helper de isolamento que o próprio arquivo define, colidindo consigo mesmo dentro da
+  janela de 900 s do bucket login. Vale registrar que eu havia adicionado `retry: 1` e
+  o REVERTI depois de observá-lo falhar: contra testes que asseguram contadores
+  persistentes exatos, retry transforma falha transitória em falha garantida. A cura
+  era isolamento, não repetição. 6 execuções consecutivas verdes, encadeadas sem pausa
+  — que é justamente a condição sob a qual a falha aparecia.
+
+  Nenhum dos achados justifica bloquear ou reabrir o merge do Epic 6. O DDL-1 é
+  correção de um débito do Epic 5, não do 6; os demais são endurecimento e coerência.
+  Recomendo que a migration 20260719210000 siga junto no mesmo merge, porque o DDL-2
+  transforma uma armadilha de manutenção numa regra escrita, e porque o DDL-1 deixa de
+  ser urgente exatamente enquanto produção tem zero cliques — a janela em que ele é
+  barato é agora.
+
+next_actions:
+  - "@po (Pax) — emendar o texto da AC1 da Story 6.4 (TD-5); texto sugerido na story"
+  - "@qa (Quinn) — considerar asserção de catálogo sobre reloptions da view (DDL-2)"
+  - "@architect (Aria) — DDL-6 (drop do índice redundante) e DDL-5 (recorte de data em getClicksByLink)"
+  - "@devops (Gage) — a migration 20260719210000 entra no CD junto com as 5 do epic; nenhuma precondição nova"
