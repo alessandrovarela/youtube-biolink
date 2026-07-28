@@ -11,6 +11,48 @@ import { PublicProfileView } from '@/components/public/PublicProfileView';
 // Revalidação ISR a cada 60s (AC7). [Source: architecture.md § 3.1 Cache]
 export const revalidate = 60;
 
+// ┌──────────────────────────────────────────────────────────────────────────────┐
+// │ POR QUE UM generateStaticParams QUE RETORNA LISTA VAZIA (DEBT-001)           │
+// └──────────────────────────────────────────────────────────────────────────────┘
+// Sem esta função, `revalidate = 60` acima é INERTE. Não é bug do Supabase, nem
+// dos cookies, nem do proxy edge: no Next 16 uma rota com SEGMENTO DINÂMICO e
+// SEM `generateStaticParams` é classificada como `ƒ` (Dynamic) no build e
+// responde `Cache-Control: private, no-cache, no-store` — o `revalidate` do
+// módulo nunca chega a ser considerado.
+//
+// Provado por experimento controlado (4 rotas-sonda, `next build` + `next start`):
+//
+//   rota-sonda                                        build      Cache-Control
+//   ──────────────────────────────────────────────────────────────────────────
+//   /probe            (segmento ESTÁTICO, revalidate)   ○ 1m      s-maxage=60, SWR
+//   /probe/[slug]     (SEM generateStaticParams)        ƒ         no-store   ← nosso caso
+//   /probe/[slug]     (COM generateStaticParams: [ ])   ●         s-maxage=60, SWR
+//   /probe/[slug]     (COM generateStaticParams: seed)  ● 1m      s-maxage=60, SWR
+//
+// A sonda que reproduz o defeito NÃO toca em Supabase, cookies nem fetch — só o
+// segmento dinâmico basta. Isso descarta todas as hipóteses anteriores.
+//
+// Retornamos LISTA VAZIA de propósito: não queremos prerenderizar username algum
+// no build (a lista muda a cada cadastro e o build não deve depender do banco).
+// Com `dynamicParams` no default (`true`), cada username é gerado SOB DEMANDA na
+// primeira visita (`x-nextjs-cache: MISS`) e servido do cache nas seguintes
+// (`HIT`), revalidando a cada 60s. É exatamente a NFR1.
+//
+// CONSEQUÊNCIAS ACEITAS (todas verificadas):
+//  • Edições no dashboard aparecem na página pública em ATÉ 60s. É o contrato que
+//    `revalidate = 60` sempre prometeu — antes ele só não estava sendo cumprido.
+//  • Um 404 (`notFound()`) TAMBÉM é cacheado por até 60s. Não fica congelado:
+//    expira e revalida como qualquer outra resposta. Um username recém-criado
+//    pode responder 404 por, no máximo, 60s após alguém ter visitado a URL antes.
+//  • O tracking de cliques NÃO é afetado: `TrackedLink` é client component e
+//    chama a Server Action no clique real, fora do render cacheado.
+//  • CSP: com o cache de fato existindo, um nonce por request voltaria a ser
+//    incompatível com o HTML cacheado desta rota — ver next.config.ts.
+// [Source: DEBT-001 · docs/architecture/technical-debt.md]
+export async function generateStaticParams() {
+  return [];
+}
+
 interface PageProps {
   params: Promise<{ username: string }>;
 }

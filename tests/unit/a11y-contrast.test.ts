@@ -10,7 +10,11 @@
 // Pares avaliados por tema:
 //   - fg / bg            → texto de corpo (normal)            → ≥ 4.5
 //   - muted-fg / bg      → texto secundário/username (normal) → ≥ 4.5
-//   - accent-fg / accent → rótulo de botão primário (UI)      → ≥ 3.0
+//   - accent-fg / accent → rótulo de botão primário (normal)  → ≥ 4.5
+//
+// Story 6.6: o limiar do par accent-fg/accent subiu de 3.0 (UI/large) para 4.5.
+// O par é usado como RÓTULO DE TEXTO no Button variant="primary" (font-medium,
+// 14–15px) — texto normal pelo critério 1.4.3, não componente de UI (1.4.11).
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
@@ -75,8 +79,8 @@ describe('Story 4.4 — WCAG AA contrast por tema', () => {
         expect(contrast(t['muted-fg'], t.bg)).toBeGreaterThanOrEqual(4.5);
       });
 
-      it('accent-fg/accent (rótulo em botão — UI/large) ≥ 3.0:1', () => {
-        expect(contrast(t['accent-fg'], t.accent)).toBeGreaterThanOrEqual(3.0);
+      it('accent-fg/accent (rótulo em botão — texto normal) ≥ 4.5:1', () => {
+        expect(contrast(t['accent-fg'], t.accent)).toBeGreaterThanOrEqual(4.5);
       });
     });
   }

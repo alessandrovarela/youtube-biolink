@@ -1,0 +1,417 @@
+epic: EPIC-6
+wave: 1
+title: "RLS Foundation (profiles + links) — Quality Gate"
+gate_agent: "@data-engineer (Dara)"
+date: "2026-07-19"
+branch: "feature/epic-6-security"
+commit: "e76c47c"
+verdict: APPROVED
+
+# ── Resultado por story ─────────────────────────────────────
+stories:
+  - id: "6.1"
+    title: "RLS policies em profiles"
+    verdict: PASS
+    acs_met: "10/10"
+  - id: "6.2"
+    title: "RLS policies em links"
+    verdict: PASS
+    acs_met: "12/12"
+
+# ── Item 1 do gate: VERIFICAÇÃO DE CATÁLOGO ─────────────────
+# O @dev da 6.2 registrou débito (#1) por não ter conseguido ler pg_policies
+# (token da CLI no keychain em formato go-keyring). ESSE DÉBITO ESTÁ FECHADO.
+# O token é recuperável (`security find-generic-password -s "Supabase CLI" -w`
+# → go-keyring-base64:<base64>, NÃO cifrado). Consulta feita pela Management API
+# (POST /v1/projects/{ref}/database/query) no projeto development.
+catalog_verification:
+  status: CONFIRMED
+  method: "Supabase Management API — pg_class.relrowsecurity + pg_policies"
+  project_dev: "rjsvkwjgsctqsswrospx (youtube-biolink-dev)"
+  rowsecurity:
+    profiles: true      # ✅ esperado (Story 6.1)
+    links: true         # ✅ esperado (Story 6.2)
+    link_clicks: false  # ✅ esperado — Story 6.3, fora da Wave 1
+  forcerowsecurity:
+    profiles: false     # ok: owner é postgres (BYPASSRLS); não afeta anon/authenticated
+    links: false
+  policies_found: 7
+  # Cada linha abaixo foi comparada CARACTERE A CARACTERE com a migration.
+  # Divergências encontradas: NENHUMA.
+  policies:
+    - table: profiles
+      name: profiles_select_public
+      permissive: PERMISSIVE
+      roles: "{anon,authenticated}"
+      cmd: SELECT
+      qual: "true"
+      with_check: null
+      matches_migration: true
+    - table: profiles
+      name: profiles_update_own
+      permissive: PERMISSIVE
+      roles: "{authenticated}"
+      cmd: UPDATE
+      qual: "(id = ( SELECT auth.uid() AS uid))"
+      with_check: "(id = ( SELECT auth.uid() AS uid))"
+      matches_migration: true
+    - table: links
+      name: links_select_public_active
+      permissive: PERMISSIVE
+      roles: "{anon,authenticated}"
+      cmd: SELECT
+      qual: "(is_active = true)"
+      with_check: null
+      matches_migration: true
+    - table: links
+      name: links_select_own
+      permissive: PERMISSIVE
+      roles: "{authenticated}"
+      cmd: SELECT
+      qual: "(profile_id = ( SELECT auth.uid() AS uid))"
+      with_check: null
+      matches_migration: true
+    - table: links
+      name: links_insert_own
+      permissive: PERMISSIVE
+      roles: "{authenticated}"
+      cmd: INSERT
+      qual: null
+      with_check: "(profile_id = ( SELECT auth.uid() AS uid))"
+      matches_migration: true
+    - table: links
+      name: links_update_own
+      permissive: PERMISSIVE
+      roles: "{authenticated}"
+      cmd: UPDATE
+      qual: "(profile_id = ( SELECT auth.uid() AS uid))"
+      with_check: "(profile_id = ( SELECT auth.uid() AS uid))"
+      matches_migration: true
+    - table: links
+      name: links_delete_own
+      permissive: PERMISSIVE
+      roles: "{authenticated}"
+      cmd: DELETE
+      qual: "(profile_id = ( SELECT auth.uid() AS uid))"
+      with_check: null
+      matches_migration: true
+  no_extra_policies: true   # nenhuma policy fora das 7 declaradas; nada anula a intenção
+  no_restrictive_policies: true  # todas PERMISSIVE → as duas SELECT de links combinam por OR
+
+# ── Item 2/4: revisão linha a linha de cada USING/WITH CHECK ─
+policy_audit:
+  bypass_attempts_analyzed:
+    - vector: "anon escreve em profiles (INSERT/UPDATE/DELETE)"
+      result: DENIED
+      why: "Nenhuma policy cobre anon para escrita; com RLS ligada, ausência de policy = negação."
+    - vector: "A reatribui profiles.id para o id de B (doação de perfil)"
+      result: DENIED
+      why: "WITH CHECK (id = auth.uid()) valida a linha RESULTANTE."
+    - vector: "A move um link próprio para profile_id de B"
+      result: DENIED
+      why: "WITH CHECK de links_update_own valida a linha resultante."
+    - vector: "A insere link com profile_id de B"
+      result: DENIED
+      why: "WITH CHECK de links_insert_own."
+    - vector: "anon lê/reativa/deleta link inativo"
+      result: DENIED
+      why: "links_select_public_active USING (is_active = true) esconde; sem policy de UPDATE/DELETE para anon."
+    - vector: "authenticated lê links ATIVOS de terceiros via PostgREST"
+      result: ALLOWED_BY_DESIGN
+      why: "Necessário: usuário logado precisa renderizar a página pública de outro. Não expõe nada além do que a página pública já expõe; inativos de terceiros seguem invisíveis (verificado)."
+    - vector: "view link_click_daily como bypass de RLS de links"
+      result: NOT_APPLICABLE
+      why: "A view lê APENAS link_clicks (pg_get_viewdef confirmado); não toca links. Ver concern #1 para o risco na Story 6.3."
+    - vector: "função SECURITY DEFINER como bypass"
+      result: CONTROLLED
+      why: "Única SECURITY DEFINER em public é handle_new_user (owner postgres). É o caminho de INSERT legítimo do signup, por design."
+  no_overpermissive_policy_found: true
+
+# ── Item 3: profiles_select_public USING (true) ─────────────
+# Julgamento: INTENCIONAL E CORRETO. Colunas auditadas uma a uma no catálogo.
+profiles_column_exposure:
+  columns_audited: 8
+  columns:
+    - { name: id,           type: uuid,        sensitive: false, note: "UUID do auth.users; já é chave pública da página." }
+    - { name: username,     type: citext,      sensitive: false, note: "Público por design (FR13/FR14) e exigido pelo signup." }
+    - { name: display_name, type: text,        sensitive: false, note: "Renderizado na página pública." }
+    - { name: bio,          type: text,        sensitive: false, note: "Renderizado na página pública." }
+    - { name: avatar_url,   type: text,        sensitive: false, note: "Renderizado na página pública." }
+    - { name: theme,        type: text,        sensitive: false, note: "Renderizado na página pública." }
+    - { name: created_at,   type: timestamptz, sensitive: false, note: "Metadado; não é PII." }
+    - { name: updated_at,   type: timestamptz, sensitive: false, note: "Metadado; não é PII." }
+  pii_found: false
+  email_or_password_in_table: false  # e-mail/credenciais vivem em auth.users, sem grant p/ anon
+  verdict: "USING (true) NÃO expõe nenhuma coluna sensível. Não há e-mail, telefone, hash nem token em public.profiles. A enumeração de usernames é o estado atual desde o Epic 2 e é REQUISITO do signup anônimo (lib/actions/auth.ts:37, role anon) e da página pública ISR. Restringir SELECT quebraria o cadastro SILENCIOSAMENTE. Decisão do @dev está correta."
+
+# ── Item 4: combinação OR das duas SELECT de links ──────────
+or_combination_verified:
+  method: "Probe comportamental própria do gate (não só os testes do @dev)"
+  setup: "Seed via service role de 1 link ativo + 1 inativo no mesmo profile"
+  results:
+    anon_sees_active: true       # ✅ GATE_ATIVO retornado
+    anon_sees_inactive: false    # ✅ GATE_INATIVO_SEGREDO ausente
+    anon_can_reactivate: false   # ✅ PATCH is_active=true → [] (0 linhas)
+    anon_can_delete: false       # ✅ DELETE → [] (0 linhas)
+    state_unchanged_after_attack: true  # ✅ releitura com service role confirma
+  owner_sees_own_inactive: true  # coberto por links-rls.test.ts:155 (suíte verde)
+  conclusion: "As duas policies PERMISSIVE combinam por OR conforme especificado. O dono enxerga os próprios inativos; anon não. O risco R1 da Story 6.2 está fechado."
+
+# ── Item 5: app-layer intacta (NFR3) ────────────────────────
+app_layer_integrity:
+  files_touched_in_lib_app_components: 0   # `git diff main...HEAD --name-only` → nenhum
+  ownership_filters_removed: 0             # nenhuma linha '-' com eq(/user.id/profile_id/is_active
+  ownership_filters_present:
+    "lib/actions/links.ts": 7
+    "lib/queries/public-page.ts": 2
+    "lib/actions/profile.ts": 2
+    "lib/analytics/clicks.ts": 1
+    "app/dashboard/links/page.tsx": 1
+    "app/dashboard/layout.tsx": 1
+    "app/dashboard/page.tsx": 1
+    "app/dashboard/analytics/page.tsx": 1
+  verdict: "PASS — defense-in-depth preservada. A Wave 1 é aditiva: só migrations, testes e docs. Zero arquivo de runtime tocado."
+
+# ── Item 6: gates executados PELO GATE (números reais) ──────
+gates_run:
+  typecheck: "PASS (exit 0, tsc --noEmit, sem saída)"
+  lint: "PASS (exit 0, eslint, sem saída)"
+  test: "PASS — 36 arquivos passed | 1 skipped (37); 219 testes passed | 1 skipped (220); 10.43s"
+  test_baseline_epic5: 192
+  test_delta: "+27 (11 de profiles-rls.test.ts + 16 de links-rls.test.ts)"
+  note: "Números reproduzidos independentemente pelo gate; batem exatamente com o relatado pelo @dev na 6.2."
+
+# ── Item 7: segurança das migrations para o CD de produção ──
+migration_safety:
+  files:
+    - "supabase/migrations/20260719170252_profiles_rls.sql"
+    - "supabase/migrations/20260719171040_links_rls.sql"
+  atomicity: "PASS — em AMBAS, as policies são criadas ANTES do ENABLE ROW LEVEL SECURITY, no mesmo arquivo. Sem janela de lockout."
+  ordering: "PASS — timestamps 20260719170252 < 20260719171040, ambos posteriores às 5 migrations já em prod. supabase db push aplica em ordem lexicográfica."
+  pgrst_reload: "PASS — ambas terminam com notify pgrst, 'reload schema'."
+  destructive_statements: none   # nenhum DROP/ALTER COLUMN/DELETE; apenas CREATE POLICY + ALTER TABLE ENABLE
+  rollback: "Trivial — DROP POLICY + ALTER TABLE ... DISABLE ROW LEVEL SECURITY. Nenhum dado é alterado."
+  cd_path: ".github/workflows/ci.yml → job migrate-production (needs: quality, if push na main, environment: production)"
+  # VERIFICAÇÃO EXTRA DO GATE: o gate bloqueante AC5 da Story 6.1 foi executado
+  # pelo @dev SOMENTE em development. Se o owner de handle_new_user() em PRODUÇÃO
+  # não fosse `postgres`, o merge quebraria o signup INTEIRO em prod. O gate
+  # verificou diretamente no projeto de produção:
+  production_preflight:
+    project: "bmyijncgsiubufwhttul (youtube-biolink-prod)"
+    handle_new_user_owner: postgres      # ✅ idêntico a development
+    handle_new_user_prosecdef: true      # ✅ SECURITY DEFINER
+    postgres_rolbypassrls: true          # ✅ o trigger insere fora do contexto de RLS
+    current_rowsecurity: "profiles=false, links=false, link_clicks=false"  # estado pré-merge esperado
+    current_policies: 0
+    migrations_applied: 5                # as 2 novas aplicarão limpo, em ordem
+    verdict: "PASS — AC5 confirmada TAMBÉM em produção. O merge é seguro para o CD aplicar."
+
+# ── Item 8: cobertura do inventário PRE-2 (§ 6) ─────────────
+inventory_coverage:
+  in_scope_wave_1:
+    - id: 3
+      item: "links-crud/links/links-reorder lendo estado com client anon (RISCO ALTO)"
+      status: COVERED
+      note: "Revisados caso a caso pelo @dev; a verificação autoritativa de estado já usava createAdminClient() antes da story. Suíte verde reproduzida pelo gate (219/219). Análise conferida e aceita."
+    - id: 4
+      item: "lib/actions/auth.ts:37 — signup como role anon"
+      status: COVERED
+      note: "profiles_select_public USING (true) confirmado no catálogo. Probe do gate: anon SELECT profiles → 200 com linha."
+    - id: 5
+      item: "lib/queries/public-page.ts — página pública anônima / 404 cacheado 60s"
+      status: COVERED
+      note: "Policies TO anon confirmadas no catálogo; @dev verificou por curl com cache ISR frio (rm -rf .next). Ação residual em prod: ver concern #2."
+    - id: 6
+      item: "dashboard/analytics perderiam links inativos com policy única"
+      status: COVERED
+      note: "Duas policies PERMISSIVE verificadas no catálogo e por probe comportamental do gate."
+    - id: 8
+      item: "mutations com RETURNING exigem policy de SELECT"
+      status: COVERED
+      note: "links_select_own cobre; testes :324 (toggle is_active=false) e :353 (delete) provam."
+    - id: 9
+      item: "track-click.ts:47 — 'Link inativo' vira caminho morto"
+      status: ACCEPTED_DEFERRED
+      note: "Não bloqueante, comportamento externo equivalente. Eliminado na Story 6.3 (validação migra para a RPC record_link_click). Não refatorar aqui foi a decisão correta."
+    - id: 10
+      item: "owner de handle_new_user() sem BYPASSRLS"
+      status: COVERED
+      note: "Verificado pelo gate em development E em produção → postgres/BYPASSRLS em ambos."
+    - id: 11
+      item: "app/health/route.ts"
+      status: NOT_APPLICABLE
+  out_of_scope_wave_1:
+    - { id: 1, item: "clicks-aggregation / clicks-benchmark com client anon", owner: "Story 6.3" }
+    - { id: 2, item: "link-clicks.test.ts:107,119", owner: "Story 6.3" }
+    - { id: 7, item: "view link_click_daily + security_invoker + grants", owner: "Story 6.3" }
+  uncovered_breaking_queries: none
+  verdict: "PASS — nenhuma query do inventário em escopo da Wave 1 ficou descoberta. Os 3 itens abertos são explicitamente da Story 6.3 e estão no OUT de escopo da 6.2."
+
+# ── Conformidade arquitetural ───────────────────────────────
+architectural_conformance:
+  policies_and_enable_same_migration: true   # decisão #5a
+  app_layer_preserved: true                  # decisão #5b / NFR3
+  no_service_role_in_runtime: true           # service role só em tests/integration/helpers/admin.ts
+  select_auth_uid_initplan: true             # (select auth.uid()) em 100% dos predicados
+  dev_applied_prod_via_cd: true              # decisão #5d — zero passo manual em prod
+  naming_traceable_to_prd: true              # links_select_public_active (PRD L529), decisão do @pm
+  no_invention: true                         # toda policy rastreia PRD 3.1 AC3 / inventário § 5.1-5.2
+
+# ── Qualidade dos testes ────────────────────────────────────
+test_quality:
+  new_tests: 27
+  db_layer: true    # atacam via PostgREST com anon key / JWT real, não mocks
+  adversarial: true # incluem tentativas de bypass: UPDATE sem filtro, WITH CHECK, UPDATE em massa
+  tautological: none
+  highlights:
+    - "links-rls.test.ts:287 — UPDATE em massa por A atinge só os próprios links (prova que a policy, não o filtro app-layer, segura)."
+    - "links-rls.test.ts:304 / profiles-rls.test.ts:161 — WITH CHECK bloqueia doação de linha."
+    - "links-rls.test.ts:324 — RETURNING de link recém-desativado (a falha mais sutil da story)."
+    - "profiles-rls.test.ts:218 — trigger handle_new_user insere com RLS ligada."
+
+# ── Concerns / débitos (nenhum bloqueante) ──────────────────
+concerns:
+  - id: 1
+    severity: medium
+    category: security
+    story: "6.2 → carry-forward 6.3"
+    status: deferred_story_6_3
+    description: >-
+      A view public.link_click_daily é owner `postgres` e NÃO declara security_invoker
+      (pg_class.reloptions = null). Views sem security_invoker executam com os
+      privilégios do OWNER — e postgres tem rolbypassrls = true. Hoje é inofensivo
+      (link_clicks ainda não tem RLS), mas no instante em que a Story 6.3 habilitar
+      RLS em link_clicks, a view passará a ser um BYPASS TOTAL dessa RLS: qualquer
+      anon com a anon key lerá a agregação de cliques de TODOS os perfis via
+      GET /rest/v1/link_click_daily. Além disso, anon tem hoje grants de
+      INSERT/UPDATE/DELETE/TRUNCATE na view (default do Supabase).
+    recommendation: >-
+      Story 6.3 DEVE incluir, na mesma migration que habilitar RLS em link_clicks:
+      `alter view public.link_click_daily set (security_invoker = on);` MAIS
+      `grant select on public.link_clicks to authenticated;` (senão o analytics
+      quebra — é o item 7 do inventário) e `revoke insert, update, delete, truncate
+      on public.link_click_daily from anon, authenticated;`. Registrado aqui para
+      não se perder entre waves.
+  - id: 2
+    severity: medium
+    category: ops
+    story: "6.1 + 6.2"
+    status: action_for_devops
+    description: >-
+      Invalidação de cache ISR em produção. A página pública é ISR (revalidate=60);
+      uma falha de policy em prod não falha alto — publica 404 cacheado por 60s. O CD
+      (migrate-production) e o deploy da Vercel não são ordenados entre si.
+      Risco real é BAIXO (as policies foram verificadas por catálogo E por
+      comportamento em dev, e a Wave 1 é puramente aditiva para leitura anônima),
+      mas a verificação pós-deploy não é opcional.
+    recommendation: >-
+      @devops: logo após o merge na main e o deploy, rodar
+      `curl -s -o /dev/null -w '%{http_code}' https://youtube-biolink.vercel.app/<username-real>`
+      → esperado 200. Se 404, rollback = `alter table public.links disable row level
+      security;` (+ profiles) e investigar antes de reabilitar.
+  - id: 3
+    severity: low
+    category: process
+    story: "6.2"
+    status: resolved_by_gate
+    description: >-
+      Débito #1 da Story 6.2: o @dev não leu pg_policies/rowsecurity do catálogo e
+      substituiu por verificação comportamental, alegando que o token da CLI estava
+      cifrado no keychain. A premissa estava ERRADA — o token é armazenado como
+      `go-keyring-base64:<base64>` (codificado, não cifrado) e é recuperável com
+      `security find-generic-password -s "Supabase CLI" -w | sed 's/go-keyring-base64://' | base64 -d`.
+    recommendation: >-
+      FECHADO por este gate: o catálogo foi lido e as 7 policies conferem
+      caractere a caractere com as migrations (ver bloco catalog_verification).
+      Documentar o comando acima para as próximas stories do Epic 6.
+  - id: 4
+    severity: low
+    category: docs
+    story: "5.4 (pré-existente) → afeta 6.3"
+    status: open
+    description: >-
+      O cabeçalho de 20260702120000_link_click_daily.sql afirma "A leitura de
+      analytics usa a anon key (mesmo client stateless das demais leituras do MVP)".
+      É FALSO: app/dashboard/analytics/page.tsx:19 usa createServerClient() com
+      cookie de sessão → role `authenticated`. A imprecisão importa porque a Story
+      6.3 vai dimensionar grants/policies de link_clicks a partir desse comentário.
+    recommendation: >-
+      Corrigir o comentário na Story 6.3. Lado bom: como o caminho real é
+      `authenticated`, links_select_own já cobre os links inativos no analytics —
+      NÃO há regressão de analytics na Wave 1 (verificado pelo gate).
+  - id: 5
+    severity: low
+    category: tests
+    story: "6.1 + 6.2"
+    status: accepted
+    description: >-
+      Smoke pela UI autenticada (editar perfil no dashboard; toggle e drag-and-drop
+      de reorder em /dashboard/links) não foi executado em nenhuma das duas stories —
+      exigiria login com senha no navegador.
+    recommendation: >-
+      Aceito. A cobertura db-layer usa as formas de query EXATAS das actions
+      (UPDATE .eq('id').eq('profile_id') com .select('*'), reorder por id+profile_id),
+      lib/actions/links.ts e profile.ts não foram tocados e seus testes seguem verdes.
+      Um clique manual no dashboard antes do merge continua recomendado (barato).
+  - id: 6
+    severity: info
+    category: security
+    story: "6.1"
+    status: accepted_by_design
+    description: >-
+      Enumeração de usernames e leitura de todas as 8 colunas de profiles via anon key
+      permanece possível.
+    recommendation: >-
+      Sem ação. NÃO é regressão (estado desde o Epic 2), nenhuma coluna é sensível
+      (auditadas uma a uma neste gate) e é requisito funcional do signup e da página
+      pública. Restringir colunas (view public_profiles / REVOKE por coluna) está
+      explicitamente OUT (inventário § 5.1) e seria invenção de requisito (Artigo IV).
+
+blocking_issues: []
+
+decision: >-
+  APPROVED — Wave 1 do Epic 6 (RLS Foundation) aprovada. As Stories 6.1 e 6.2 estão
+  Done do ponto de vista do quality gate e a branch está liberada para push/PR (@devops).
+
+  O débito central aberto pelo @dev da 6.2 foi FECHADO por este gate: o catálogo de
+  development foi lido diretamente (Management API) e as 7 policies conferem
+  CARACTERE A CARACTERE com o que as migrations declaram — roles, cmd, USING e
+  WITH CHECK. rowsecurity = true em profiles e links, false em link_clicks (correto,
+  é 6.3). Nenhuma policy extra, nenhuma RESTRICTIVE, nada anulando a intenção.
+
+  Verificação adicional que nenhuma story fez e que era o maior risco não coberto:
+  o gate bloqueante AC5 (owner de handle_new_user) foi confirmado TAMBÉM em
+  PRODUÇÃO → postgres / SECURITY DEFINER / BYPASSRLS. Sem isso, o merge poderia
+  quebrar o signup inteiro em prod. Está seguro.
+
+  As policies foram auditadas linha a linha em busca de bypass e o gate rodou suas
+  PRÓPRIAS probes adversariais contra o dev com a anon key crua (não só os testes do
+  @dev): anon não lê link inativo, não o reativa, não deleta, não insere e não
+  escreve em profiles; o estado do banco ficou inalterado após todas as tentativas.
+  A combinação OR das duas SELECT PERMISSIVE de links foi provada com um link
+  inativo real semeado para este gate. profiles_select_public USING (true) é
+  correto: as 8 colunas foram auditadas e nenhuma é sensível — não há e-mail nem
+  credencial em public.profiles.
+
+  App-layer 100% intacta (NFR3): zero arquivos de lib/, app/ ou components/ no diff
+  da branch; 16 filtros de ownership continuam no lugar. A Wave 1 é puramente
+  aditiva.
+
+  Gates reproduzidos pelo gate: typecheck PASS, lint PASS, 219/219 testes (+1
+  skipped, 36 arquivos), +27 sobre a baseline do Epic 5. Migrations atômicas,
+  ordenadas, não destrutivas e com rollback trivial — seguras para o CD aplicar.
+
+  Nenhum issue CRITICAL/HIGH. Os 6 concerns são MEDIUM ou menos e nenhum bloqueia.
+  Os dois MEDIUM são acionáveis e estão endereçados: o concern #1 (view
+  link_click_daily sem security_invoker) é o achado mais importante deste gate — não
+  afeta a Wave 1, mas se torna um BYPASS TOTAL da RLS no momento em que a Story 6.3
+  habilitar RLS em link_clicks, e por isso está registrado aqui com a correção
+  exata; o concern #2 é o curl de verificação pós-deploy, ação de @devops.
+
+next_actions:
+  - owner: "@devops"
+    action: "Push da branch + PR. Após o merge e o deploy, curl em /[username] real → esperar 200 (concern #2)."
+  - owner: "@dev / @sm (Story 6.3)"
+    action: "Incluir na migration de link_clicks: security_invoker=on na view link_click_daily + grant select em link_clicks para authenticated + revoke de escrita na view para anon (concern #1). Corrigir o comentário do cabeçalho da migration da view (concern #4)."
+  - owner: "owner do produto"
+    action: "Clique manual no dashboard (editar perfil, toggle de link, reorder) antes do merge — barato e fecha o concern #5."

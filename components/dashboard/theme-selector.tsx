@@ -49,10 +49,14 @@ const OPTIONS: Record<Theme, Option> = {
     value: 'accent',
     label: 'accent',
     caption: 'Marca quente',
-    cardBg: '#FAF7F2',
+    // Story 6.6 — o canvas real do tema accent é --color-bg: #EDD3A9 (globals.css
+    // e a referência de design concordam); o preview usava a surface/card do
+    // ui_kit, mostrando um bege-claro que a página nunca renderiza. Accent
+    // alinhado ao token final #B35536 (AC1, gate de design issue #1).
+    cardBg: '#EDD3A9',
     cardFg: '#1A1410',
     cardBorder: '#E5DBC8',
-    strip: [{ bg: '#FAF7F2', border: '#E5DBC8' }, { bg: '#F0E9DD' }, { bg: '#D97757' }],
+    strip: [{ bg: '#EDD3A9', border: '#E5DBC8' }, { bg: '#F0E9DD' }, { bg: '#B35536' }],
   },
 };
 

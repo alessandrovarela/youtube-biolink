@@ -665,7 +665,13 @@ app/
 └── health/route.ts
 ```
 
-**Sem middleware.ts na raiz.** Página pública usa `[username]` direto — a reserved-list (Story 2.3) impede conflito com rotas estáticas.
+**Sem arquivo de proxy/middleware na raiz** *(no MVP — ver nota)*. Página pública usa `[username]` direto — a reserved-list (Story 2.3) impede conflito com rotas estáticas.
+
+> **Atualizado pelo Epic 6 (Story 6.5 + TD-6):** existe hoje um `proxy.ts` na raiz — auth
+> guard edge + refresh proativo de token, matcher cirúrgico `/dashboard/:path*`. Ele
+> **não** faz rewrite e **não** participa da resolução de rotas, então o parágrafo acima
+> segue valendo para roteamento. Criado como `middleware.ts`; renomeado para `proxy.ts`
+> em TD-6 (o Next 16.2.6 depreciou a convenção antiga). Ver `docs/architecture/routing.md` § 6.
 
 ### 10.3.1 Auth Guard via Layout
 
@@ -752,7 +758,7 @@ export async function createServerClient() {
         setAll: (cookies) => {
           try {
             cookies.forEach(({ name, value, options }) => cookieStore.set(name, value, options));
-          } catch { /* Server Component sem permissão de set — ok se middleware/layout refrescaram */ }
+          } catch { /* Server Component sem permissão de set — ok se proxy/layout refrescaram */ }
         },
       },
     }

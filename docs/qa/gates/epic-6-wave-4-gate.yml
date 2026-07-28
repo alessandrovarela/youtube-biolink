@@ -1,0 +1,1102 @@
+epic: EPIC-6
+wave: 4
+title: "Middleware edge (Story 6.5) + re-verificação da correção HIGH da Story 6.4 — Quality Gate"
+gate_agent: "@qa (Quinn)"
+date: "2026-07-19"
+branch: "feature/epic-6-security"
+commit: "722e0d1"
+verdict: CONCERNS
+
+# ── Resultado por story ─────────────────────────────────────
+stories:
+  - id: "6.5"
+    title: "Middleware edge: auth guard + CSP formal + refresh de token"
+    verdict: CONCERNS
+    acs_met: "12/13 provadas por observação direta · 1 parcial (AC7)"
+    note: >-
+      O núcleo da story está CORRETO e foi provado de forma independente por este gate,
+      indo ALÉM do que o @dev conseguiu: o matcher é cirúrgico e sem bypass (9 variantes
+      de evasão testadas), o guard de layout está intocado, os 4 headers cobrem TODAS as
+      rotas, e — o que o @dev nunca fez — o DASHBOARD AUTENTICADO foi renderizado nos 3
+      temas e o REFRESH DE TOKEN foi provado empiricamente com um access_token expirado.
+      CONCERNS por três achados novos deste gate, nenhum bloqueante: o fail-fast do pepper
+      NÃO se comporta como documentado (issue #1), a justificativa do `unsafe-inline`
+      está factualmente errada em parte (issue #2), e o `?next=` é um parâmetro morto
+      (issue #4).
+
+  - id: "6.4"
+    title: "Re-verificação da correção HIGH (issue #1 do gate da Wave 3)"
+    verdict: PASS
+    note: >-
+      A correção está COMPLETA e foi reproduzida do zero por este gate. Os TRÊS abusos que
+      eu mesmo provei na Wave 3 estão FECHADOS, e a não-regressão do teto de 60/min/link
+      foi confirmada com 65 chamadas reais (primeira recusa na #61). O ponto frágil do
+      desenho — depender de SECURITY DEFINER para alcançar uma primitiva revogada — foi
+      validado empiricamente e FUNCIONA. A issue #3 (LOW) da Wave 3 também está corrigida.
+
+# ══════════════════════════════════════════════════════════════
+# PARTE B — RE-VERIFICAÇÃO DA CORREÇÃO HIGH DA STORY 6.4
+# (reproduzida do zero, com a anon key crua, sem tocar no Next.js)
+# ══════════════════════════════════════════════════════════════
+part_b_high_reverification:
+  migration: "supabase/migrations/20260719200000_rate_limit_hardening.sql"
+  applied_in_development: true
+  method: >-
+    curl direto ao PostgREST de development (rjsvkwjgsctqsswrospx) com a
+    NEXT_PUBLIC_SUPABASE_ANON_KEY crua de .env.local. Nenhum resultado lido do relatório
+    do @dev.
+
+  abuse_a_analytics_suppression:
+    original_vector: >-
+      60 chamadas a check_rate_limit('track_link', <link_id>, 60, 60, 10) esgotavam o
+      balde de um link de TERCEIRO sem gravar um único clique, silenciando a analytics
+      daquele link. Não mitigável pelo pepper — o subject ali é o link_id, público por design.
+    target_link: "6da450c3-a1ab-4447-a45f-7aa8801eb9a6 (Instagram, ativo — o mesmo link do abuso (a) da Wave 3)"
+    probes:
+      - path: "POST /rpc/check_rate_limit (primitiva genérica)"
+        response: '{"code":"42501","message":"permission denied for function check_rate_limit"}'
+        http: 401
+      - path: "POST /rpc/check_app_rate_limit com p_bucket=track_link"
+        response: '{"code":"22023","message":"check_app_rate_limit: bucket track_link nao permitido"}'
+        http: 400
+      - path: "POST /rpc/check_app_rate_limit com p_bucket=track_link e subject em hex64 (tentando furar o regex)"
+        response: '{"code":"22023","message":"check_app_rate_limit: bucket track_link nao permitido"}'
+        http: 400
+    verdict: CLOSED
+    reasoning: >-
+      Fechado por DUAS barreiras independentes: o revoke da primitiva (42501) e a
+      allowlist do wrapper, que não contém 'track_link'. Tentei contornar o regex de
+      subject usando um digest hex — irrelevante, porque a validação de BUCKET acontece
+      ANTES da validação de subject no corpo da função. O vetor mais grave da Wave 3, e o
+      único que o pepper não podia mitigar, está inalcançável de fora.
+
+  abuse_b_auth_lockout:
+    original_vector: >-
+      Com o pepper vazio, o subject de auth é sha256(':'||ip) — função pública. 10
+      requisições anônimas negavam login a um IP arbitrário por 15 minutos.
+    probes:
+      - description: "subject forjado do IP-vítima 203.0.113.77 com pepper VAZIO (o ataque literal da Wave 3)"
+        forged_subject: "684064235b913936c6e149acdfb5f37f154595d7e609ca73415cbf9d26ada393"
+        via_primitive: '{"code":"42501","message":"permission denied for function check_rate_limit"} — HTTP 401'
+      - description: "o subject forjado ainda colide com o subject REAL que o app computa?"
+        real_subject_with_pepper: "218d73abec2a09975dc6d6b9a9c7ca1d3182974395983a2dfd9b3ef0b91e3c96"
+        collides: false
+    environment_finding: >-
+      ✅ `.env.local` AGORA DEFINE RATE_LIMIT_PEPPER (64 chars) — na Wave 3 eu registrei
+      que não definia. O modo degradado deixou de ser o modo atual de development. A ação
+      que o gate da Wave 3 endereçou ao @dev foi CUMPRIDA.
+    verdict: CLOSED_WITH_RESIDUAL
+    reasoning: >-
+      A via direta está morta (primitiva revogada). Resta a via do wrapper: 'login' ESTÁ
+      na allowlist, então quem conseguir COMPUTAR o subject da vítima ainda gasta o balde
+      dela. Isso é uma limitação ESTRUTURAL, não um defeito da correção — o subject tem de
+      vir do app, porque só o app enxerga o IP do visitante. O controle compensatório é o
+      pepper, e ele agora existe em development e é precondição bloqueante de merge para
+      produção. A migration documenta essa fronteira com honestidade no bloco "O QUE ESTA
+      FUNÇÃO NÃO RESOLVE, E POR QUÊ" — julgo a documentação do limite tão importante
+      quanto a correção em si, e ela está correta.
+
+  abuse_c_arbitrary_buckets:
+    original_vector: "buckets inventados aceitos e persistidos → crescimento irrestrito de rate_limit_counters (contra NFR8)."
+    probes_bucket:
+      - { bucket: "lixo",           result: '22023 bucket lixo nao permitido',           http: 400 }
+      - { bucket: "qa_gate_probe",  result: '22023 bucket qa_gate_probe nao permitido',  http: 400 }
+      - { bucket: "track_link",     result: '22023 bucket track_link nao permitido',     http: 400 }
+      - { bucket: "(string vazia)", result: '22023 bucket  nao permitido',               http: 400 }
+      - { bucket: "login; drop",    result: '22023 bucket login; drop nao permitido',    http: 400 }
+    probes_subject:
+      - { subject: "192.168.1.1",     result: '22023 subject deve ser um digest hex de 64 chars' }
+      - { subject: "nao-hex",         result: '22023 subject deve ser um digest hex de 64 chars' }
+      - { subject: "zzz…(64 chars)",  result: '22023 subject deve ser um digest hex de 64 chars' }
+    verdict: CLOSED
+    reasoning: >-
+      Allowlist de bucket e regex de subject aplicados ANTES de qualquer escrita, e sem
+      `exception when others` para engoli-los — a rejeição é visível (HTTP 400), que é o
+      comportamento certo para falha de POLÍTICA. O NFR19 virou invariante do BANCO e não
+      só promessa do app: um IP em claro é recusado pela própria função.
+
+  # ── O PONTO FRÁGIL DO DESENHO, VALIDADO ───────────────────
+  non_regression_layer_1_ceiling:
+    question: >-
+      A primitiva foi revogada para anon. record_link_click é SECURITY DEFINER e deve
+      continuar alcançando-a INTERNAMENTE. Esse é o ponto frágil do desenho: se a
+      resolução de privilégio não funcionasse como a migration argumenta, o teto de
+      60/min/link teria sido silenciosamente DESLIGADO — reabrindo o vetor de click
+      inflation que a Wave 3 fechou, sem nenhum sinal de erro.
+    method: "65 chamadas sequenciais a POST /rpc/record_link_click com a anon key crua, tag user_agent_short='QA-GATE-W4-PROBE'."
+    results:
+      clicks_before: 0
+      calls_fired: 65
+      responses_true: 60
+      responses_false: 5
+      responses_error: 0
+      first_refusal: "chamada #61"
+      clicks_after: 60
+      sub_buckets:
+        - { window_start: "18:52:30+00", hits: 2 }
+        - { window_start: "18:52:40+00", hits: 51 }
+        - { window_start: "18:52:50+00", hits: 7 }
+      sum_of_hits: 60
+    verdict: PASS
+    reasoning: >-
+      IDÊNTICO ao comportamento pré-correção: 60 aceitas, primeira recusa na #61, 60
+      cliques gravados. A soma dos sub-buckets é 60 e não 65 — as chamadas estouradas
+      continuam NÃO incrementando o contador (AC3 / risco R4 seguem fechados). ZERO erros
+      em 65 chamadas: nenhuma delas bateu em 42501, o que prova que a chamada interna à
+      primitiva revogada é resolvida com os privilégios do OWNER. O argumento central da
+      migration sobre SECURITY DEFINER está CORRETO e agora está provado empiricamente,
+      não aceito no texto.
+    layer_2_still_works:
+      method: "62 chamadas a check_app_rate_limit('track', <hex64>) como anon"
+      result: "true=60, false=2 — teto de 60 aplicado pelo wrapper"
+      verdict: PASS
+
+  wave_3_issue_3_fix:
+    issue: "#3 (LOW) — o fail-open não cobria o bloco DECLARE; p_bucket_seconds=0 propagava 22012."
+    probe: "POST /rpc/check_rate_limit via service_role com p_bucket_seconds=0"
+    before: '{"code":"22012","message":"division by zero"} — HTTP 400'
+    after: "true"
+    verdict: FIXED
+    reasoning: >-
+      As variáveis agora são apenas DECLARADAS e atribuídas dentro do bloco protegido. O
+      fail-open passou a ser total, e o comentário didático da migration voltou a descrever
+      o código com exatidão. O gate da Wave 3 pediu explicitamente "preferir corrigir o
+      código a ajustar a afirmação" — foi o que se fez.
+
+  state_restored:
+    status: CONFIRMED
+    how: >-
+      Delete dos 60 link_clicks com tag QA-GATE-W4-PROBE; delete dos 3 sub-buckets
+      track_link do link atacado; delete dos contadores sintéticos ('track' do
+      qa-w4-app-path, 'qa_w4_faildecl' e os subjects de login forjados); remoção do usuário
+      de probe via admin API (cascata para profiles).
+    verification: >-
+      Diff programático do snapshot pré-ataque contra o pós-cleanup: LINHAS NOVAS
+      REMANESCENTES = 0. A única linha removida em relação ao pré foi um artefato do
+      PRÓPRIO gate (bucket 'login', subject 'aaaa…', criado na sondagem inicial que
+      confirmou a migration aplicada). Cliques do link atacado de volta a 0 (valor
+      pré-ataque), perfil de probe = 0. Nenhum artefato deste gate permanece em development.
+
+# ══════════════════════════════════════════════════════════════
+# PARTE A — STORY 6.5 (MIDDLEWARE)
+# ══════════════════════════════════════════════════════════════
+
+# ── AC4/AC5: o matcher, que é o risco central ───────────────
+matcher_verification:
+  method: >-
+    curl real contra build de PRODUÇÃO (pnpm build && pnpm start). A prova é estrutural e
+    não depende de instrumentação: o middleware redireciona INCONDICIONALMENTE quando não
+    há usuário, então QUALQUER resposta 200 anônima é prova de que ele NÃO foi invocado
+    naquele path.
+  results:
+    - { path: "/dashboard",            result: "307 → /login?next=%2Fdashboard",            middleware_ran: true }
+    - { path: "/dashboard/links",      result: "307 → /login?next=%2Fdashboard%2Flinks",    middleware_ran: true }
+    - { path: "/dashboard/analytics",  result: "307 → /login?next=%2Fdashboard%2Fanalytics", middleware_ran: true }
+    - { path: "/alessandrovarela",     result: "200 OK (perfil real)",                      middleware_ran: false }
+    - { path: "/login",                result: "200 OK",                                    middleware_ran: false }
+    - { path: "/signup",               result: "200 OK",                                    middleware_ran: false }
+    - { path: "/health",               result: "200 OK",                                    middleware_ran: false }
+    - { path: "/reset-password",       result: "200 OK",                                    middleware_ran: false }
+    - { path: "/auth/callback",        result: "307 → /auth/confirm-failed (lógica própria da rota, NÃO /login)", middleware_ran: false }
+    - { path: "/_next/static/chunks/0zoa._yun3_11.js", result: "200 OK · Cache-Control: public, max-age=31536000, immutable", middleware_ran: false }
+  verdict: PASS
+  reasoning: >-
+    O matcher positivo e enumerado (`/dashboard/:path*`) faz exatamente o que a story
+    contratou. `/auth/callback` é o caso mais importante da lista: ele responde com a
+    própria lógica (confirm-failed por code inválido) e NÃO com o /login do middleware —
+    o fluxo de troca de code por sessão está intacto. Os assets mantêm o
+    `immutable` de 1 ano, sem custo de invocação edge.
+
+  bypass_attempts:
+    method: "9 variantes de path com --path-as-is contra o build de produção."
+    results:
+      - { path: "/dashboard/",             result: "308 → /dashboard (normaliza, depois barra)" }
+      - { path: "/Dashboard",              result: "404" }
+      - { path: "/DASHBOARD",              result: "404" }
+      - { path: "/dashboard//links",       result: "308 → /dashboard/links" }
+      - { path: "//dashboard",             result: "308 → /dashboard" }
+      - { path: "/dashboard/links/",       result: "308 → /dashboard/links" }
+      - { path: "/dashboard/../dashboard", result: "307 → /login (barrado)" }
+      - { path: "/dashboard%2Flinks",      result: "307 → /login (barrado)" }
+      - { path: "/./dashboard",            result: "307 → /login (barrado)" }
+      - { path: "/dashboard?_rsc=abc + header RSC:1", result: "307 → /login (barrado)" }
+    verdict: NO_BYPASS_FOUND
+    reasoning: >-
+      O Next normaliza o path ANTES de avaliar o matcher, então as variantes com barra
+      dupla, barra final e path traversal convergem para a forma canônica e são
+      capturadas. Nenhuma variante alcançou conteúdo do dashboard. Testei também a
+      requisição RSC (`?_rsc=` + header `RSC: 1`), que é o vetor sutil — um matcher que
+      só cobrisse o documento HTML deixaria o payload RSC exposto. Está coberto.
+    note: >-
+      `/Dashboard` dá 404 e não redirect: o matcher é case-sensitive, mas o roteador do
+      Next também é, então não existe rota a proteger ali. Não é bypass.
+
+# ── AC3: defense-in-depth (a proibição do epic) ─────────────
+layout_guard_preserved:
+  method: "git diff main...HEAD -- app/dashboard/layout.tsx"
+  result: "VAZIO — o arquivo não aparece no diff da branch em nenhuma forma."
+  layout_guard_still_present: "app/dashboard/layout.tsx L12-19: createServerClient() + getUser() + redirect('/login?next=/dashboard')"
+  verdict: PASS
+  reasoning: >-
+    A camada autoritativa está intacta. As duas camadas coexistem exatamente como o
+    princípio do epic exige: o middleware SOMOU, não substituiu. Este era o risco R3 e o
+    ponto que, se violado, contradiria o epic inteiro — está respeitado, e verificado no
+    diff e não no relatório.
+
+# ── AC2/AC6: guard e refresh COM SESSÃO REAL ────────────────
+# O @dev nunca renderizou o dashboard autenticado. Este gate renderizou.
+authenticated_session_verification:
+  why_it_matters: >-
+    O @dev verificou apenas o caminho ANÔNIMO (redirect). O caminho POSITIVO — usuário
+    válido passa, e o token é renovado — nunca foi exercido em runtime por ninguém antes
+    deste gate. Sem isso, um middleware que redirecionasse TODO MUNDO (inclusive
+    autenticados) passaria em todos os testes do @dev.
+  method: >-
+    Usuário de probe criado via admin API (service role) com user_metadata.username
+    (exigido pelo trigger handle_new_user). Login pelo caminho REAL do produto
+    (POST /auth/v1/token?grant_type=password com a ANON key). Cookie de sessão montado no
+    formato do @supabase/ssr 0.10.3 (`sb-<ref>-auth-token` = 'base64-' + base64(JSON)).
+  ac2_positive_path:
+    results:
+      - { path: "/dashboard",           result: "200 OK · 15917 bytes de HTML" }
+      - { path: "/dashboard/links",     result: "200 OK · 11888 bytes" }
+      - { path: "/dashboard/analytics", result: "200 OK · 17432 bytes" }
+    verdict: PASS
+    note: "O guard deixa passar sessão válida. A metade positiva da AC2 está PROVADA pela primeira vez."
+  ac6_proactive_refresh:
+    method: >-
+      Cookie remontado com o access_token EXPIRADO (expires_at 120s no passado) e o
+      refresh_token VÁLIDO — a condição exata que a AC6 descreve.
+    results:
+      http: "200 OK (a navegação NÃO caiu para /login)"
+      set_cookie_emitted: "sb-rjsvkwjgsctqsswrospx-auth-token=base64-eyJhY2Nlc3NfdG9rZW4i…"
+      new_access_token_differs_from_original: true
+      new_expires_at_in_future: true
+    verdict: PASS
+    reasoning: >-
+      PROVA EMPÍRICA DIRETA do refresh proativo. O middleware detectou a expiração, trocou
+      o refresh_token por um access_token NOVO, propagou o Set-Cookie ao browser e serviu
+      o dashboard — o usuário não precisou refazer login. A AC5 deferida da Story 2.9
+      (L494) está fechada com prova de comportamento, não com leitura de código. Confirma
+      também que o padrão de reatribuição do `response` dentro de `setAll` está correto:
+      se o response não fosse recriado, o cookie novo não chegaria ao browser.
+
+# ── AC7: CSP nos 3 temas — o gap que o @dev sinalizou ───────
+ac7_csp_browser_validation:
+  browser_available_to_qa: false
+  evidence: "`list_connected_browsers` retornou [] também para este gate — mesma limitação do @dev."
+  explicit_statement: >-
+    ⚠️ DECLARO EXPLICITAMENTE: eu TAMBÉM não consegui observar o console de um browser
+    real. A AC7, na sua redação literal ("o console do browser está limpo"), permanece
+    NÃO VERIFICADA POR OBSERVAÇÃO DIRETA após este gate. Não vou classificar como
+    verificada aquilo que não observei.
+  what_this_gate_did_beyond_the_dev:
+    - >-
+      RENDERIZOU O DASHBOARD AUTENTICADO — que o @dev declarou que "nunca foi renderizado".
+      As 3 rotas de dashboard foram servidas com sessão real e o HTML auditado.
+    - >-
+      RENDERIZOU OS 3 TEMAS. O tema vem de profiles.theme; alterei-o via service role para
+      light, dark e accent e re-renderizei /dashboard em cada um.
+  theme_matrix:
+    rows:
+      - { theme: light,  bytes: 15917, inline_scripts: 6, external_resources: 0 }
+      - { theme: dark,   bytes: 15984, inline_scripts: 7, external_resources: 0 }
+      - { theme: accent, bytes: 15987, inline_scripts: 7, external_resources: 0 }
+    note: >-
+      dark e accent acrescentam 1 script inline (o anti-flash do ThemeProvider, Story 4.3)
+      — coberto por `script-src 'unsafe-inline'`. ZERO recursos externos em qualquer tema.
+  authenticated_html_audit:
+    method: "Enumeração de todo construto que carrega recurso no HTML das 3 rotas autenticadas."
+    findings:
+      - { route: "/dashboard",           script_src_externo: 0, stylesheet_externo: 0, script_inline: 6,  style_tag: 0, style_attr: 14, svg_inline: 1, img_externo: 0 }
+      - { route: "/dashboard/links",     script_src_externo: 0, stylesheet_externo: 0, script_inline: 6,  style_tag: 0, style_attr: 1,  svg_inline: 0, img_externo: 0 }
+      - { route: "/dashboard/analytics", script_src_externo: 0, stylesheet_externo: 0, script_inline: 10, style_tag: 0, style_attr: 1,  svg_inline: 0, img_externo: 0 }
+    verdict: NO_VIOLATION_SURFACE_FOUND
+    reasoning: >-
+      Todo `<script src>` e `<link rel=stylesheet>` aponta para /_next/* (⊂ 'self'). Os
+      atributos `style=` (14 em /dashboard) estão cobertos por `style-src 'unsafe-inline'`.
+      O SVG inline do gráfico (Story 5.5) não carrega recurso externo. Zero host externo em
+      posição de carregamento. Não existe, no HTML servido, nenhum recurso que a CSP
+      entregue fosse bloquear.
+  residual_gap_severity: low
+  severity_reasoning: >-
+    Classifico como LOW, e não medium, e explico por quê — a preocupação legítima é que
+    "uma CSP mal calibrada quebra o dashboard SILENCIOSAMENTE no browser enquanto o build
+    passa". Essa preocupação é real, mas ela se materializa através de RECURSOS QUE O
+    BROWSER TENTA CARREGAR E A POLICY RECUSA. A superfície inteira desses recursos está
+    agora enumerada no HTML REALMENTE SERVIDO das 5 rotas × 3 temas, incluindo as
+    autenticadas, e ela é integralmente coberta pela policy. O que resta fora de alcance é
+    estreito e o registro honestamente: comportamento que só existe em runtime de browser —
+    um `eval()` dentro de um chunk exercitado apenas por interação (dnd-kit em drag ativo),
+    uma requisição `fetch`/WebSocket disparada por evento de usuário, ou um recurso
+    injetado dinamicamente por JS. `connect-src` já libera o domínio Supabase (REST e wss),
+    que é o único destino de rede do produto. O risco não é zero, mas é bem menor do que
+    "não verificado" sugere.
+  recommendation: >-
+    Manter como precondição pós-merge, não como bloqueio: abrir as 5 rotas × 3 temas com o
+    console aberto (10 minutos), incluindo UM drag de link e UMA troca de período no
+    gráfico de analytics — que são as duas interações que exercitam código não coberto pela
+    análise estática. Consolidar com a verificação pós-deploy já pendente das Waves 1 e 2.
+
+# ── AC9: headers em todas as rotas ──────────────────────────
+security_headers:
+  method: "curl -I contra build de produção, contando os 4 headers em cada rota."
+  coverage:
+    - { path: "/",                    headers_present: "4/4" }
+    - { path: "/login",               headers_present: "4/4" }
+    - { path: "/signup",              headers_present: "4/4" }
+    - { path: "/health",              headers_present: "4/4" }
+    - { path: "/alessandrovarela",    headers_present: "4/4" }
+    - { path: "/reset-password",      headers_present: "4/4" }
+    - { path: "/auth/confirm-failed", headers_present: "4/4" }
+    - { path: "/_next/static/chunks/*.js", headers_present: "4/4" }
+  csp_production: >-
+    default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';
+    img-src 'self' data: blob: https:; font-src 'self' data:;
+    connect-src 'self' https://rjsvkwjgsctqsswrospx.supabase.co wss://rjsvkwjgsctqsswrospx.supabase.co;
+    frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self';
+    upgrade-insecure-requests
+  csp_development_delta: "ganha 'unsafe-eval', ws: e http://localhost:* (HMR); perde upgrade-insecure-requests. Confirmado por curl em pnpm dev."
+  enforce_not_report_only: true
+  verdict: PASS
+  reasoning: >-
+    Os 4 headers estão presentes em TODAS as rotas testadas, inclusive nos assets
+    estáticos, em modo ENFORCE (AC8 cumprida — Report-Only não apareceria como
+    `Content-Security-Policy`). HSTS corretamente ausente (AC10 — delegado à Vercel).
+
+# ── JULGAMENTO: a decisão de escopo dos headers ─────────────
+judgment_header_placement:
+  decision_by_dev: "4 headers em next.config.ts headers() com source '/:path*'; middleware só com auth/sessão."
+  qa_verdict: CORRETA — E É A ÚNICA ESCOLHA DEFENSÁVEL
+  reasoning: >-
+    Verifiquei a consequência da alternativa em vez de aceitar o argumento. Se a CSP
+    morasse no middleware, ela só existiria onde o matcher alcança — `/dashboard/*`. Isso
+    deixaria SEM CSP justamente `/[username]`, que é a superfície MAIS exposta do produto:
+    é a única rota anônima, renderiza `avatar_url` (URL arbitrária fornecida pelo usuário)
+    e lista URLs de links também fornecidas pelo usuário. Proteger o dashboard autenticado
+    e deixar a página pública descoberta seria exatamente o inverso do que a superfície de
+    risco pede. A separação escolhida (middleware = auth/sessão; next.config = headers)
+    é coerente, cobre 4/4 headers em 8/8 rotas testadas, e não custa invocação edge.
+    A decisão está certa e a documentação dela em next.config.ts é honesta.
+
+# ── JULGAMENTO: 'unsafe-inline' é regressão disfarçada? ─────
+judgment_unsafe_inline:
+  qa_verdict: NÃO É REGRESSÃO — MAS A JUSTIFICATIVA REGISTRADA ESTÁ PARCIALMENTE ERRADA
+  is_it_a_regression:
+    answer: "Não."
+    reasoning: >-
+      O baseline desta branch é AUSÊNCIA TOTAL de CSP. `script-src 'self' 'unsafe-inline'`
+      é estritamente melhor que nada: continua bloqueando script de host externo, e a
+      policy entrega junto `object-src 'none'`, `base-uri 'self'`, `form-action 'self'` e
+      `frame-ancestors 'none'` — quatro controles REAIS que não dependem de 'unsafe-inline'
+      e que fecham, respectivamente, plugins legados, sequestro de URL relativa,
+      exfiltração de credencial por form injetado e clickjacking. Nada foi enfraquecido em
+      relação ao que existia. Não há regressão.
+  but_the_honest_framing: >-
+    Dito isso, `script-src` com 'unsafe-inline' neutraliza justamente a função pela qual a
+    CSP é conhecida: mitigação de XSS. Uma CSP com 'unsafe-inline' em script-src não
+    impede a execução de um `<script>` injetado. O ganho de NFR4 aqui é real mas está
+    concentrado nos OUTROS diretivos, não no script-src. A story deveria dizer isso com
+    essas palavras.
+  where_the_dev_reasoning_breaks:
+    claim: >-
+      Completion Note 2: "'unsafe-inline', que o App Router exigiria de qualquer forma" e
+      "nonce por request torna a resposta não-cacheável [...] a página pública é ISR
+      (revalidate = 60, NFR1)".
+    finding_1: >-
+      ❌ FACTUALMENTE INCORRETO que o App Router "exigiria de qualquer forma". O Next.js
+      suporta CSP com nonce via middleware como padrão de primeira classe e propaga o nonce
+      para os próprios scripts inline do RSC. O que é verdade é algo mais fraco: um nonce
+      exige geração por request e portanto não cabe em headers ESTÁTICOS de next.config.
+    finding_2: >-
+      ❌ O ARGUMENTO DO CACHE DEFENDE UM CACHE QUE NÃO EXISTE. A premissa é que o nonce
+      quebraria o ISR de `/[username]`. Mas este gate PROVOU (ver isr_debt abaixo) que
+      `/[username]` NÃO está em ISR: responde `no-store` e builda como `ƒ`. E `/dashboard/*`
+      já é dinâmico e já passa pelo middleware. Ou seja, as duas superfícies que um nonce
+      afetaria já são dinâmicas — o custo de cache alegado é zero hoje.
+  net_judgment: >-
+    A DECISÃO é aceitável e proporcional para um projeto didático de MVP: uma única fonte
+    de headers, simples de manter, sem duas CSPs divergentes. Não bloqueio. O que NÃO é
+    aceitável é o REGISTRO da decisão, que apresenta como impossibilidade técnica
+    ("exigiria de qualquer forma", "quebraria o ISR") aquilo que é, na verdade, uma
+    escolha de simplicidade. Num projeto cujo propósito declarado é ENSINAR, uma
+    justificativa tecnicamente errada é um defeito de produto: o leitor aprende a coisa
+    errada. Ver issue #2.
+  img_src_https_judgment:
+    qa_verdict: JUSTIFICÁVEL — mantenha
+    reasoning: >-
+      `profile.avatar_url` é URL arbitrária do usuário renderizada em `<img>` puro
+      (components/ui/Avatar.tsx). Sem `https:` todo avatar externo quebraria em silêncio —
+      exatamente a armadilha que a AC7 existe para evitar. O custo real de `img-src https:`
+      é privacidade (o host da imagem vê IP/UA de quem visita a página) e a possibilidade
+      de pixel de rastreamento; NÃO habilita execução de script. Para uma feature de
+      produto contratada, é a troca certa. A alternativa forte — proxiar avatares por
+      next/image com allowlist de host — é mudança de produto, fora do escopo desta story.
+      Registro como débito informativo, não como defeito.
+
+# ── JULGAMENTO: o fail-fast do pepper ───────────────────────
+# ACHADO NOVO E CENTRAL DESTE GATE.
+judgment_pepper_fail_fast:
+  question: "Lançar na carga do módulo em produção é a escolha certa, ou cria indisponibilidade pior que o problema que resolve?"
+  qa_verdict: O PRINCÍPIO ESTÁ CERTO — A IMPLEMENTAÇÃO ESTÁ NO PIOR LUGAR POSSÍVEL
+  documented_claim: >-
+    lib/rate-limit.ts L78-83 afirma: "production sem pepper → lança na CARGA DO MÓDULO.
+    O app NÃO SOBE. Um deploy mal provisionado quebra ruidosamente NO BOOT, e não
+    silenciosamente meses depois."
+  empirical_test:
+    method: "Removi RATE_LIMIT_PEPPER de .env.local e exercitei build + boot + rotas + Server Action real, em NODE_ENV=production."
+    results:
+      - { step: "pnpm build",                        result: "EXIT 0 — build PASSA sem o pepper" }
+      - { step: "pnpm start (boot)",                 result: "sobe normalmente, sem erro no log" }
+      - { step: "GET /",                             result: "307 (normal)" }
+      - { step: "GET /login",                        result: "200" }
+      - { step: "GET /signup",                       result: "200" }
+      - { step: "GET /health",                       result: "200 — health check VERDE" }
+      - { step: "GET /alessandrovarela",             result: "200" }
+      - { step: "erro do pepper no log após tudo isso", result: "0 ocorrências" }
+      - { step: "POST Server Action de login REAL (header Next-Action com o id extraído do HTML)", result: "HTTP 500 · log: '⨯ Error: [rate-limit] RATE_LIMIT_PEPPER é OBRIGATÓRIO em produção…'" }
+  finding: >-
+    ❌ A AFIRMAÇÃO DOCUMENTADA É FALSA. O app SOBE. O build PASSA. Todas as páginas servem
+    200. O /health responde VERDE. O erro só aparece na PRIMEIRA INVOCAÇÃO REAL de uma
+    Server Action que importe o módulo — porque o Next carrega módulos de Server Action sob
+    demanda, não no boot.
+  why_this_is_the_worst_placement: >-
+    O controle está tarde demais para impedir o deploy ruim e cedo demais para ser
+    inofensivo. Um deploy mal provisionado ficaria com TODOS OS SINAIS VERDES — build
+    verde, deploy verde, homepage verde, página pública verde, /health verde — enquanto
+    login, signup, reset de senha E tracking de cliques retornam 500. Monitoração que
+    observe disponibilidade de página (o padrão) não veria nada. Quem descobre é o usuário
+    tentando entrar. Blast radius: lib/rate-limit.ts é importado por lib/actions/auth.ts e
+    lib/actions/track-click.ts, ou seja, a superfície de auth INTEIRA mais o tracking.
+  is_it_worse_than_the_problem_it_solves:
+    answer: "No caso de má configuração, sim — mas a comparação certa não é essa."
+    reasoning: >-
+      Sem pepper e sem fail-fast: o atacante nega login a IPs ESCOLHIDOS (indisponibilidade
+      parcial, dirigida, exige ação do atacante). Com fail-fast e env ausente: TODO MUNDO
+      perde auth (indisponibilidade total, imediata, sem atacante nenhum). O modo de falha
+      é pior. O que salva a escolha é que a condição é determinística, de provisionamento
+      único, já contratada como precondição BLOQUEANTE de merge (AC9 / issue #2 da Wave 3),
+      e produz mensagem de erro excelente — enquanto a degradação silenciosa duraria
+      indefinidamente sem ninguém notar. Por isso NÃO peço remoção do fail-fast.
+  recommendation: >-
+    Mover a validação para o BUILD, não substituir o throw. Um check de env em
+    next.config.ts (ou passo de preflight no CI) que falhe `next build` quando
+    NODE_ENV=production e RATE_LIMIT_PEPPER estiver ausente torna o deploy ruim
+    IMPOSSÍVEL de embarcar — e aí o throw em runtime vira backstop redundante que nunca
+    dispara. Isso é estritamente melhor que as duas alternativas atuais e custa poucas
+    linhas. E, independentemente disso, CORRIGIR O COMENTÁRIO: ele descreve um
+    comportamento que o código não tem, num arquivo cujo propósito é didático. Ver issue #1.
+
+# ── AC5 / NFR1: o achado de ISR do @dev, verificado ─────────
+isr_debt_independent_verification:
+  dev_claim: "`/[username]` não está de fato em ISR (retorna no-store, builda como ƒ), e isso é PRÉ-EXISTENTE."
+  qa_verdict: CONFIRMADO — E É DÉBITO DE PROJETO, NÃO DESTA STORY
+  method: >-
+    A/B feito por este gate, movendo FISICAMENTE middleware.ts e next.config.ts para fora
+    do projeto (mv, não git stash, para não colidir com o @ux-design-expert na mesma
+    branch) e rebuildando do zero.
+  results:
+    - { scenario: "COM middleware.ts + next.config.ts (esta story)", build_output: "ƒ /[username]", cache_control: "private, no-cache, no-store, max-age=0, must-revalidate" }
+    - { scenario: "SEM middleware.ts e SEM next.config.ts (baseline)", build_output: "ƒ /[username]", cache_control: "(idêntico — rota já dinâmica)" }
+  corroborating_evidence:
+    - "app/[username]/ NÃO aparece em `git diff main...HEAD` — o arquivo está intocado por esta branch."
+    - "app/[username]/page.tsx L12 declara `export const revalidate = 60` — a intenção existe."
+    - "createPublicClient() não lê cookies (lib/supabase.ts L49-53) e nenhum componente da árvore importa next/headers — a causa NÃO é opt-out dinâmico por cookies/headers."
+  verdict_scope: "PRÉ-EXISTENTE — a Story 6.5 NÃO causou e NÃO agravou."
+  gap_description: >-
+    NFR1 contrata cache agressivo na página pública e a rota DECLARA `revalidate = 60`,
+    mas o comportamento observável é `no-store`: nenhuma resposta é cacheada, e cada
+    visita à página pública paga render + round-trip ao Supabase. O `revalidate = 60`
+    está inerte. Não determinei a causa-raiz com certeza (candidato mais provável:
+    segmento dinâmico sem `generateStaticParams` combinado ao comportamento de fetch não
+    cacheado do supabase-js sob Next 16/Turbopack) e não vou especular além disso num gate.
+  routing: >-
+    Registrar como DÉBITO DE PROJETO (não da 6.5) e endereçar a @architect. Tem interseção
+    direta com o concern #2 da Wave 1 ("verificação pós-deploy de ISR em produção"), que
+    segue aberto desde então — este gate dá a explicação provável de por que aquela
+    verificação nunca fechou. Ver issue #3.
+
+# ── Deprecação middleware.ts → proxy.ts (Next 16.2.6) ───────
+middleware_deprecation:
+  warning: '⚠ The "middleware" file convention is deprecated. Please use "proxy" instead.'
+  reproduced_by_gate: true
+  observations:
+    - "O warning some quando middleware.ts é removido (confirmado no A/B) — a origem é o arquivo, não outra configuração."
+    - "É WARNING, não erro: build exit 0, e o middleware FUNCIONA integralmente (todos os 307/200 desta seção foram obtidos com ele ativo)."
+    - "O build output já nomeia a saída como `ƒ Proxy (Middleware)` — o Next já trata internamente como proxy."
+  impact: LOW
+  judgment: >-
+    Não afeta esta wave: comportamento correto, build verde, zero impacto funcional. Mas é
+    dívida com prazo — numa major seguinte o convention deixa de ser aceito e o middleware
+    silenciosamente para de rodar. E aí o guard EDGE desaparece sem quebrar build nem
+    teste; só o guard de layout seguraria. É precisamente o cenário para o qual o AC3
+    (defense-in-depth) existe — a segunda camada cobriria a falha, o que valida a decisão
+    de arquitetura da story.
+  recommendation: >-
+    Follow-up de baixa prioridade, NÃO nesta story: a renomeação mexe em convention de
+    framework e merece story própria com atualização de routing.md e dos testes (que
+    importam '@/middleware'). Ver issue #5.
+
+# ── AC11: fluxo de login ────────────────────────────────────
+login_flow:
+  auth_callback_intact:
+    verdict: PASS
+    proof: >-
+      `/auth/callback` NÃO está no matcher (provado por curl: responde
+      307 → /auth/confirm-failed pela própria lógica da rota, e não o 307 → /login do
+      middleware). O arquivo app/auth/callback/route.ts não aparece no diff da branch.
+      A troca de code por sessão está estruturalmente preservada.
+  login_page_and_actions:
+    verdict: PASS
+    proof: "/login e /signup servem 200; a Server Action de login foi INVOCADA de verdade por este gate (header Next-Action) e executou o corpo da action — ver judgment_pepper_fail_fast."
+  full_manual_smoke:
+    verdict: PARTIAL
+    what_was_covered: >-
+      Login real via GoTrue (o mesmo endpoint que a action usa), sessão válida servindo as
+      3 rotas do dashboard, refresh de token com sessão expirada, e os 3 temas renderizados.
+      Isso é substancialmente mais do que o "NÃO EXECUTADO" da story.
+    what_remains: >-
+      A jornada pela UI real (preencher formulário, editar perfil, arrastar link, logout
+      pelo botão) não foi executada — mesmo débito do concern #7 da Wave 3 e #6 da Wave 2.
+      Baixa prioridade: as camadas por baixo estão exercitadas.
+
+# ── AC12/AC13: testes e build ───────────────────────────────
+tests_and_build:
+  middleware_test_quality:
+    file: "tests/unit/middleware.test.ts — 9 testes"
+    covers: "redirect sem usuário; ?next= preservado; passa com usuário; usa getUser() e não getSession(); matcher cobre /dashboard/*; NÃO cobre /[username], /_next, assets, /auth/callback, /login, /signup, /health, /; guarda contra matcher catch-all com negative lookahead."
+    verdict: PASS_WITH_CAVEAT
+    caveat: >-
+      O teste do matcher REIMPLEMENTA o algoritmo de matching do Next
+      (`matcherToRegExp`) — valida a cópia, não o roteador real. O próprio arquivo admite
+      isso em comentário e aponta para a verificação por curl, que é a prova de verdade. É
+      a mesma troca que aprovei na Wave 3 para a janela deslizante, mas aqui ela é MAIS
+      frágil, porque a semântica de matcher do Next pode mudar entre versões sem que o
+      teste perceba. Aceito porque este gate executou a verificação de runtime real (10
+      paths + 10 variantes de bypass) e ela CONFIRMA o contrato.
+    regression_lock_quality: >-
+      O teste "não usa matcher catch-all com negative lookahead" é a melhor trava do
+      arquivo: assere que todo pattern começa com /dashboard e não contém '(?!'. Se alguém
+      colar o matcher da doc do Next, quebra. Trava certa para o risco certo (R1).
+  gates_run_by_this_gate:
+    typecheck: "PASS — exit 0, tsc --noEmit, sem saída"
+    lint: "PASS — exit 0, eslint, sem saída"
+    test: "PASS — 42 arquivos passed | 1 skipped (43); 317 testes passed | 1 skipped (318); 32.87s"
+    build: "PASS — exit 0, com o warning de deprecação do middleware"
+    dev: "PASS — `✓ Ready in 143ms`; /dashboard responde 307 → /login; CSP de dev traz unsafe-eval, ws: e localhost:*"
+    baseline_claimed_by_dev: 317
+    reconciliation: "BATE EXATAMENTE. 317 passed + 1 skipped, reproduzido do zero por este gate."
+    progression: "192 (Epic 5) → 219 (W1) → 233 (W2) → 287/296 (W3) → 317 (W4)"
+    delta_from_wave_3: "+21 sobre os 296 da suíte completa da Wave 3 (que já incluía os 9 do middleware): +21 de rate-limit-app-path e das travas da correção da issue #1."
+
+# ── Rastreabilidade das 13 ACs da Story 6.5 ─────────────────
+ac_traceability:
+  total: 13
+  proven_by_direct_observation: 12
+  partial: 1
+  detail:
+    AC1:  "PASS — middleware.ts na raiz com export const config.matcher."
+    AC2:  "PASS — ambas as metades. Anônimo → 307 /login (3 rotas). COM SESSÃO VÁLIDA → 200 (3 rotas), provado por este gate pela primeira vez."
+    AC3:  "PASS — layout.tsx ausente do diff; guard getUser()+redirect intacto."
+    AC4:  "PASS — 10 paths + 10 variantes de bypass. /_next, assets, /[username], /auth/callback, /login, /signup, /health, / NÃO interceptados."
+    AC5:  "PASS quanto à NÃO-REGRESSÃO (A/B idêntico com e sem a story). A rota responde 200. O `revalidate=60` já estava inerte ANTES — débito de projeto, issue #3."
+    AC6:  "PASS — refresh provado com access_token expirado: Set-Cookie novo, token diferente, expires_at futuro, 200 sem cair para /login."
+    AC7:  "PARCIAL — superfície de recursos das 5 rotas × 3 temas auditada no HTML servido, incluindo as autenticadas: zero recurso que a policy bloquearia. Console de browser NÃO observado (sem browser para o @qa também). Gap LOW, ver ac7_csp_browser_validation."
+    AC8:  "PASS — CSP em enforce (header Content-Security-Policy, não Report-Only)."
+    AC9:  "PASS — os 4 headers em 8/8 rotas testadas, inclusive assets."
+    AC10: "PASS — nenhum Strict-Transport-Security emitido pelo app; delegado à Vercel e documentado."
+    AC11: "PARCIAL — fluxo de auth estruturalmente preservado e Server Action de login invocada de verdade; jornada pela UI não executada."
+    AC12: "PASS — 9 testes verdes, com trava de regressão do matcher. Caveat de reimplementação registrado."
+    AC13: "PASS — pnpm build exit 0."
+
+# ── Conformidade arquitetural ───────────────────────────────
+architectural_conformance:
+  defense_in_depth_preserved: true      # AC3 — as duas camadas coexistem
+  matcher_positive_enumerated: true     # nada de catch-all com negative lookahead
+  zero_new_dependencies: true           # @supabase/ssr já era do projeto
+  no_new_env: true
+  headers_single_source_of_truth: true  # next.config.ts, sem CSP duplicada no middleware
+  hsts_not_duplicated: true             # AC10
+  stretch_correctly_omitted: true       # rewrite /@username fora do DoD (decisão #3)
+  docs_updated: true                    # routing.md §1/§3 corrigidas + nova §6
+  no_invention: true
+
+# ── Issues / concerns ───────────────────────────────────────
+concerns:
+  - id: 1
+    severity: medium
+    category: security
+    story: "6.4 / 6.5 (transversal)"
+    status: open
+    title: "O fail-fast do pepper NÃO lança no boot como documenta — ele converte um deploy mal provisionado em queda TOTAL de auth com todos os health checks verdes"
+    description: >-
+      lib/rate-limit.ts L78-83 e L121-124 afirmam que sem RATE_LIMIT_PEPPER em produção o
+      app "não sobe" e "quebra ruidosamente no boot". Testei e a afirmação é FALSA: o
+      build passa (exit 0), o servidor sobe, e /, /login, /signup, /health e /[username]
+      respondem 200 sem nenhum erro no log. O throw só dispara na primeira invocação real
+      de uma Server Action que importe o módulo — porque o Next carrega esses módulos sob
+      demanda.
+    proof: >-
+      PROBE DESTE GATE, com RATE_LIMIT_PEPPER removido de .env.local e NODE_ENV=production:
+      `pnpm build` → EXIT 0. `pnpm start` → sobe limpo. GET /, /login, /signup, /health,
+      /alessandrovarela → 307/200/200/200/200, ZERO ocorrências do erro no log. Em seguida
+      invoquei a Server Action de login DE VERDADE (header `Next-Action` com o id extraído
+      do HTML renderizado) → HTTP 500, e só então o log registrou
+      "⨯ Error: [rate-limit] RATE_LIMIT_PEPPER é OBRIGATÓRIO em produção…".
+    impact: >-
+      Um deploy sem o env fica com TODOS OS SINAIS VERDES — build, deploy, homepage,
+      página pública e /health — enquanto login, signup, reset de senha e tracking de
+      cliques devolvem 500. Monitoração de disponibilidade de página não detecta. O blast
+      radius é a superfície de auth inteira (lib/actions/auth.ts) mais o tracking
+      (lib/actions/track-click.ts). Comparado ao problema que resolve — lockout de IPs
+      escolhidos por um atacante — o modo de falha na má configuração é PIOR: total, e sem
+      precisar de atacante.
+    why_not_blocking: >-
+      (1) Só se materializa se o env faltar, e isso já é precondição BLOQUEANTE de merge
+      desde o gate da Wave 3 (issue #2), reafirmada abaixo. (2) `.env.local` agora define
+      o pepper, então development não está mais degradado. (3) A mensagem de erro é
+      excelente e o diagnóstico é imediato para quem olhar o log. (4) O princípio —
+      falhar alto num controle de segurança em vez de degradar em silêncio — está CERTO e
+      eu o endosso; o defeito é de POSICIONAMENTO e de DOCUMENTAÇÃO, não de intenção.
+    recommendation: >-
+      @dev — duas ações, ambas baratas. (a) MOVER a validação para o build: um check em
+      next.config.ts (ou preflight no CI) que faça `next build` FALHAR quando
+      NODE_ENV=production e RATE_LIMIT_PEPPER estiver ausente. Isso impede o deploy ruim de
+      embarcar e transforma o throw em runtime num backstop redundante que nunca dispara —
+      estritamente melhor que o estado atual. (b) CORRIGIR o comentário de lib/rate-limit.ts:
+      trocar "o app não sobe / quebra no boot" por "a primeira invocação de qualquer Server
+      Action de auth ou tracking falha com 500". Num arquivo cujo propósito é didático, um
+      comentário que descreve comportamento inexistente ensina a coisa errada.
+
+  - id: 2
+    severity: medium
+    category: docs
+    story: "6.5"
+    status: open
+    title: "A justificativa registrada para `script-src 'unsafe-inline'` é factualmente incorreta em dois pontos"
+    description: >-
+      A Completion Note 2 da story e o comentário de next.config.ts L13-20 justificam a
+      ausência de nonce com dois argumentos que não se sustentam: (a) que 'unsafe-inline'
+      "o App Router exigiria de qualquer forma", e (b) que um nonce quebraria o cache ISR
+      da página pública. O primeiro é falso — o Next suporta CSP com nonce via middleware
+      como padrão de primeira classe, propagando o nonce aos próprios scripts inline do
+      RSC. O segundo defende um cache que NÃO EXISTE: este gate provou que `/[username]`
+      responde `no-store` e builda como `ƒ`, e `/dashboard/*` já é dinâmico e já passa pelo
+      middleware. As duas superfícies que um nonce afetaria já são dinâmicas hoje.
+    impact: >-
+      NENHUM em runtime — a policy entregue é a mesma e não é uma regressão (o baseline
+      era ausência total de CSP; `object-src 'none'`, `base-uri 'self'`, `form-action
+      'self'` e `frame-ancestors 'none'` são ganhos reais que não dependem de
+      'unsafe-inline'). O impacto é DIDÁTICO e de manutenção: a decisão é apresentada como
+      impossibilidade técnica quando é, na verdade, uma escolha legítima de simplicidade.
+      Quem reler isso no futuro concluirá que nonce é inviável neste projeto — e não é.
+    recommendation: >-
+      @dev / @architect — reescrever a justificativa com o enquadramento honesto: "optamos
+      por uma única fonte estática de headers, simples de manter e sem duas CSPs
+      divergentes; o preço é um script-src que não mitiga XSS". E registrar como débito
+      explícito que, se/quando `/[username]` for de fato colocada em ISR (issue #3), a
+      opção nonce-via-middleware para `/dashboard/*` volta à mesa sem custo de cache
+      nenhum. NÃO peço mudança de código nesta story.
+
+  - id: 3
+    severity: medium
+    category: performance
+    story: "PROJETO (pré-existente — NÃO da 6.5)"
+    status: open
+    title: "`/[username]` declara `revalidate = 60` mas responde `no-store` — o ISR do NFR1 nunca existiu"
+    description: >-
+      app/[username]/page.tsx L12 declara `export const revalidate = 60`, mas a rota builda
+      como `ƒ` (Dynamic) e responde
+      `Cache-Control: private, no-cache, no-store, max-age=0, must-revalidate`. Nenhuma
+      resposta da página pública é cacheada: cada visita paga render completo mais
+      round-trip ao Supabase. O achado é do @dev e foi CONFIRMADO independentemente por
+      este gate.
+    proof: >-
+      A/B DESTE GATE: movi FISICAMENTE middleware.ts e next.config.ts para fora do projeto
+      e rebuildei do zero. Resultado idêntico ao da branch completa — `ƒ /[username]` nos
+      DOIS cenários. Corroborado por: app/[username]/ não aparece em `git diff main...HEAD`;
+      createPublicClient() não lê cookies; nenhum componente da árvore importa next/headers.
+      A causa NÃO é a Story 6.5 e NÃO é opt-out dinâmico por cookies/headers.
+    impact: >-
+      Gap de NFR1 (cache agressivo em páginas públicas). Custo de compute e de latência em
+      toda visita anônima, e pressão desnecessária sobre o free tier do Supabase — a mesma
+      preocupação de NFR8 que motivou parte do Epic 6. Nenhum impacto de segurança.
+    scope_ruling: >-
+      DÉBITO DE PROJETO, NÃO DESTA STORY. A Story 6.5 não causou nem agravou: o AC5 pede
+      que o comportamento de cache permaneça INALTERADO pela story, e ele permaneceu. Seria
+      errado penalizar a 6.5 por um defeito que ela apenas tornou visível.
+    recommendation: >-
+      @architect — investigar a causa-raiz e decidir. Candidato mais provável: segmento
+      dinâmico sem `generateStaticParams` combinado ao comportamento de fetch não cacheado
+      do supabase-js sob Next 16/Turbopack. NÃO especulei além disso e recomendo que quem
+      corrigir também não o faça. Tem interseção direta com o concern #2 da Wave 1
+      ("verificação pós-deploy de ISR em produção"), aberto desde então — este achado
+      provavelmente EXPLICA por que aquela verificação nunca fechou. Consolidar os dois.
+
+  - id: 4
+    severity: low
+    category: code
+    story: "6.5"
+    status: open
+    title: "O `?next=` que o middleware constrói é um parâmetro MORTO — ninguém o consome"
+    description: >-
+      middleware.ts L63-64 monta `?next=<pathname>` com o comentário "Preserva o destino
+      para o pós-login". Nenhum código do projeto lê esse parâmetro: app/login/page.tsx só
+      tipa e lê `confirmed` e `reset`, e `signIn` (lib/actions/auth.ts L100) redireciona
+      incondicionalmente para '/dashboard'. O único lugar que lê um `next` é
+      app/auth/callback/route.ts, que é outro fluxo e não recebe este parâmetro.
+    proof: >-
+      Grep deste gate por consumo de 'next' em app/, lib/ e components/: a única ocorrência
+      é app/auth/callback/route.ts L11. app/login/page.tsx L6 declara
+      `searchParams: Promise<{ confirmed?: string; reset?: string }>` — sem `next`.
+    impact: >-
+      NENHUM em segurança — e verifiquei especificamente por open redirect: o valor vem de
+      `request.nextUrl.pathname`, que sob o matcher `/dashboard/:path*` sempre começa com
+      /dashboard, então não há como induzir destino externo. É defeito de PRECISÃO DA
+      AFIRMAÇÃO: o comentário promete um comportamento de produto que não existe. Nota
+      atenuante: o guard de layout (Story 2.9) JÁ fazia o mesmo, então o middleware está
+      espelhando fielmente o padrão pré-existente — a inconsistência é herdada, não
+      inventada aqui.
+    recommendation: >-
+      @dev / @po — escolher uma das duas e não deixar no meio: (a) IMPLEMENTAR o
+      pós-login, fazendo signIn ler `next` e redirecionar para lá, validando que começa com
+      '/' e não com '//' (o mesmo cuidado que app/auth/callback/route.ts L12 já aplica
+      corretamente); ou (b) remover o parâmetro das duas camadas e ajustar os comentários.
+      A opção (a) é a que cumpre a intenção evidente. Baixa prioridade.
+
+  - id: 5
+    severity: low
+    category: code
+    story: "6.5"
+    status: open
+    title: "Next 16.2.6 deprecia o convention `middleware.ts` em favor de `proxy.ts`"
+    description: >-
+      O build emite `⚠ The "middleware" file convention is deprecated. Please use "proxy"
+      instead.` Reproduzido por este gate, e confirmado como originado do arquivo: o
+      warning DESAPARECE no A/B em que middleware.ts foi removido. O build output já nomeia
+      a saída como `ƒ Proxy (Middleware)`.
+    impact: >-
+      NENHUM hoje: é warning e não erro, o build passa (exit 0) e o middleware funciona
+      integralmente — todos os 307/200 deste gate foram obtidos com ele ativo. O risco é
+      futuro e tem uma propriedade desagradável: numa major seguinte, o convention deixa de
+      ser reconhecido e o middleware simplesmente PARA DE RODAR, sem quebrar build, sem
+      quebrar typecheck e sem quebrar os 9 testes unitários (que importam '@/middleware'
+      diretamente, não o roteador). O guard edge sumiria em silêncio.
+    mitigating_factor: >-
+      É exatamente o cenário para o qual o AC3 existe: o guard de layout continuaria
+      barrando o acesso. A perda seria de otimização (render evitado) e do refresh
+      proativo, não de controle de acesso. Isso VALIDA a decisão de defense-in-depth da
+      story de um jeito que nem a story previu.
+    recommendation: >-
+      @sm / @dev — follow-up de baixa prioridade, FORA desta story e FORA desta wave.
+      Renomear convention de framework merece story própria, porque arrasta
+      docs/architecture/routing.md §6, os imports de tests/unit/middleware.test.ts e a
+      redação das Dev Notes. Não fazer no fim de um epic.
+
+  - id: 6
+    severity: low
+    category: security
+    story: "PROJETO (pré-existente, Story 2.5 — NÃO da 6.5)"
+    status: open
+    title: "`/auth/callback` valida `next` contra `//` mas não contra `/\\` — backslash normaliza para protocol-relative"
+    description: >-
+      app/auth/callback/route.ts L12 faz
+      `next.startsWith('/') && !next.startsWith('//')` para evitar open-redirect. Um valor
+      como `/\evil.com` passa nos dois testes (começa com '/', não começa com '//'), mas o
+      construtor de URL normaliza a barra invertida: `new URL('http://host' + '/\\evil.com')`
+      resolve para `http://host//evil.com`, que os browsers tratam como protocol-relative.
+    proof: >-
+      PROBE DESTE GATE: `node -pe "new URL('http://localhost:3000' + '/\\\\evil.com').href"`
+      → `http://localhost:3000//evil.com`. O ramo vulnerável NÃO foi alcançável nas minhas
+      probes por curl porque exige um `code` VÁLIDO — com code inválido as 4 variantes
+      testadas caíram todas em /auth/confirm-failed, como esperado.
+    impact: >-
+      BAIXO e condicionado. Exige que o atacante induza a vítima a abrir um link contendo
+      um `code` válido (o do próprio atacante) mais o `next` malicioso — o que logaria a
+      vítima na conta do atacante e depois a mandaria para fora. Vetor estreito e ruidoso.
+    scope_ruling: >-
+      PRÉ-EXISTENTE e FORA DO ESCOPO DA 6.5 — app/auth/callback/route.ts não aparece em
+      `git diff main...HEAD`. Registro aqui porque o Epic 6 é o epic de Segurança e
+      Hardening e porque toquei nessa superfície ao verificar que o fluxo de auth seguia
+      intacto (AC11). Seria omissão não reportar.
+    recommendation: >-
+      @dev — endurecer a validação com uma linha:
+      `next.startsWith('/') && !next.startsWith('//') && !next.startsWith('/\\')`, ou
+      preferencialmente resolver com `new URL(next, origin)` e comparar `.origin` com o
+      origin esperado, que é imune a essa classe inteira de truque de normalização.
+
+  - id: 7
+    severity: low
+    category: tests
+    story: "6.5"
+    status: accepted
+    title: "O teste de matcher reimplementa o algoritmo de matching do Next"
+    description: >-
+      tests/unit/middleware.test.ts L30-35 converte o padrão `/dashboard/:path*` num regex
+      próprio para decidir o que o Next interceptaria. Valida a CÓPIA, não o roteador. O
+      próprio arquivo admite isso em comentário e aponta para a verificação por curl.
+    impact: >-
+      Baixo, mas real: a semântica de matcher do Next pode mudar entre versões — e a
+      deprecação da issue #5 mostra que ESTÁ mudando — sem que o teste perceba. É a mesma
+      troca que aprovei na Wave 3 para a janela deslizante, porém mais frágil, porque lá o
+      alvo era código do projeto e aqui é comportamento de framework.
+    recommendation: >-
+      Aceito. Este gate executou a verificação de runtime real (10 paths + 10 variantes de
+      bypass contra o build de produção) e ela CONFIRMA o contrato do teste. A trava contra
+      matcher catch-all continua valiosa mesmo sendo aproximada. Se a wave 5 tocar no
+      middleware, considerar um teste de integração que suba o servidor.
+
+  - id: 8
+    severity: low
+    category: tests
+    story: "6.5"
+    status: accepted
+    title: "Jornada pela UI real não executada (débito recorrente)"
+    description: >-
+      Não abri navegador para preencher o formulário de login, arrastar um link, trocar o
+      período do gráfico e clicar em logout. Mesmo débito dos concerns #7 (Wave 3) e #6
+      (Wave 2).
+    mitigating_coverage: >-
+      Este gate reduziu MUITO o débito em relação às waves anteriores: login real via
+      GoTrue, sessão válida servindo as 3 rotas do dashboard, refresh com token expirado,
+      3 temas renderizados e a Server Action de login INVOCADA de verdade. O que falta é
+      especificamente interação de browser.
+    recommendation: "Consolidar com a verificação pós-deploy pendente e com a validação de console do AC7 — uma sessão única de ~10 minutos fecha os três."
+
+# ── Concerns herdados ───────────────────────────────────────
+inherited_concerns:
+  - id: 1
+    from: "wave-3 #1"
+    title: "check_rate_limit como primitiva de ESCRITA remota (HIGH)"
+    status: CLOSED
+    note: >-
+      FECHADO E REPRODUZIDO POR ESTE GATE. Os três abusos que provei na Wave 3 estão
+      barrados: (a) 42501 na primitiva e 22023 no wrapper para o bucket track_link;
+      (b) primitiva revogada, e o subject forjado com pepper vazio não colide mais com o
+      real; (c) 5 buckets inválidos e 3 subjects malformados todos recusados antes de
+      qualquer escrita. Não-regressão confirmada com 65 chamadas reais: primeira recusa na
+      #61, 60 cliques gravados, soma dos sub-buckets = 60. A recomendação (a) do gate — mais
+      forte que a (b) que eu havia sugerido — foi a implementada. Escolha acertada.
+  - id: 2
+    from: "wave-3 #2"
+    title: "RATE_LIMIT_PEPPER ausente = lockout de auth por IP"
+    status: PARTIALLY_CLOSED
+    note: >-
+      Development FECHADO: .env.local agora define o pepper (64 chars), verificado por este
+      gate — a ação endereçada ao @dev foi cumprida. Produção CONTINUA PRECONDIÇÃO
+      BLOQUEANTE de merge. E este gate acrescenta urgência pelo lado oposto: sem o env, não
+      é só o controle que degrada — a auth INTEIRA cai com 500 e os health checks ficam
+      verdes (issue #1).
+  - id: 3
+    from: "wave-3 #3"
+    title: "fail-open não cobria o bloco DECLARE (LOW)"
+    status: CLOSED
+    note: "FECHADO E VERIFICADO. p_bucket_seconds=0 agora retorna `true` em vez de propagar 22012. O @dev corrigiu o CÓDIGO em vez de ajustar a afirmação, que foi exatamente o que o gate pediu."
+  - id: 4
+    from: "wave-3 #4"
+    title: "AC1/AC17 exigem subject 64-hex; bucket track_link usa uuid"
+    status: STILL_OPEN
+    note: "Correção de redação de AC, endereçada a @po/@sm. Não tocada por esta wave. Observo que a migration de hardening tornou a regra REAL para os buckets de app (regex no banco), o que reforça que o texto da AC é que precisa acomodar o track_link."
+  - id: 5
+    from: "wave-3 #6"
+    title: "Nenhum teste cobre o abuso de check_rate_limit chamada direto por anon"
+    status: LIKELY_CLOSED_NOT_AUDITED
+    note: >-
+      A branch ganhou tests/integration/rate-limit-app-path.test.ts (+159 linhas) e a suíte
+      subiu de 296 para 317. Não auditei esse arquivo linha a linha — o escopo deste gate é
+      a 6.5 mais a re-verificação empírica da correção, e a correção eu provei diretamente
+      contra o banco. @qa numa wave futura deve confirmar que existe trava asserindo 42501
+      na primitiva e 22023 para bucket fora da allowlist.
+  - id: 6
+    from: "wave-2 #3"
+    title: "janela não-ordenada entre a migration de produção e o deploy da Vercel"
+    status: STILL_OPEN
+    note: "Ação de @devops. Não afetada por esta wave."
+  - id: 7
+    from: "wave-2 #5"
+    title: "revisão de DDL pelo @data-engineer"
+    status: STILL_OPEN
+    note: >-
+      Continua pendente. A DDL cresceu de novo nesta wave (check_app_rate_limit). O gate da
+      Wave 3 encontrou achado na DDL anterior; a correção parece sólida sob as minhas
+      probes, mas revisão formal por especialista segue recomendada antes do fechamento do epic.
+  - id: 8
+    from: "wave-1 #2"
+    title: "verificação pós-deploy de ISR em produção"
+    status: STILL_OPEN_WITH_NEW_EXPLANATION
+    note: >-
+      Este gate provavelmente EXPLICA por que nunca fechou: a rota não está de fato em ISR
+      (issue #3), e isso é anterior a todo o Epic 6. Consolidar os dois num único item para
+      @architect.
+
+blocking_issues: []
+
+merge_preconditions:
+  - owner: "@devops"
+    precondition: >-
+      RATE_LIMIT_PEPPER provisionado em production E preview na Vercel ANTES do merge
+      (AC9 da 6.4). REAFIRMADO E REFORÇADO por este gate: além do lockout de auth que o
+      gate da Wave 3 provou, a ausência do env agora derruba a superfície de auth INTEIRA
+      com HTTP 500 enquanto build, deploy, homepage, página pública e /health permanecem
+      VERDES (issue #1). Um deploy sem esse env parece saudável e não tem login.
+
+decision: >-
+  CONCERNS — Wave 4 do Epic 6 APROVADA PARA MERGE com 8 concerns documentados, nenhum
+  bloqueante, e UMA precondição de merge herdada e reforçada (o pepper na Vercel).
+
+  A CORREÇÃO DO HIGH DA STORY 6.4 ESTÁ COMPLETA, e eu a reproduzi do zero em vez de ler o
+  relatório. Os três abusos que eu mesmo provei na Wave 3 estão fechados: a supressão de
+  analytics bate em 42501 na primitiva revogada E em 22023 no wrapper, porque 'track_link'
+  não está na allowlist — tentei ainda contornar o regex de subject com um digest hex e a
+  validação de bucket acontece antes, então não adianta; o lockout de auth perdeu a via
+  direta e o subject forjado com pepper vazio não colide mais com o real, agora que
+  .env.local define o pepper; e os buckets arbitrários foram recusados em 5 variantes,
+  incluindo string vazia e tentativa de injeção, junto com 3 subjects malformados,
+  inclusive um IP em claro — o NFR19 virou invariante do banco e não mais promessa do app.
+
+  O PONTO FRÁGIL DO DESENHO FOI O QUE MAIS ME INTERESSOU, E ELE AGUENTA. Revogar a
+  primitiva e contar com SECURITY DEFINER para que record_link_click continue alcançando-a
+  internamente é uma aposta em resolução de privilégio: se estivesse errada, o teto de
+  60/min/link teria sido DESLIGADO em silêncio e o vetor de click inflation que a Wave 3
+  fechou estaria reaberto, sem erro nenhum aparecendo. Disparei 65 chamadas reais ao
+  PostgREST com a anon key crua: 60 aceitas, primeira recusa na #61, 60 cliques gravados,
+  ZERO erros de permissão, e a soma dos sub-buckets em 60 e não em 65 — o que reconfirma de
+  quebra que requisição estourada não incrementa contador. A camada 2 também segue de pé
+  pelo wrapper (60 true, depois recusa). A issue #3 da Wave 3 está corrigida no código, e
+  não na afirmação, que era o que eu havia pedido. Estado de development integralmente
+  restaurado e verificado por diff programático: zero linhas remanescentes deste gate.
+
+  NA STORY 6.5, O NÚCLEO ESTÁ CERTO E EU FUI ALÉM DO QUE O @dev CONSEGUIU. O matcher é
+  cirúrgico e não achei bypass em 10 variantes, incluindo path traversal, barra dupla,
+  encoding e — o vetor sutil — a requisição RSC com header próprio. A prova de
+  não-interceptação é estrutural e não depende de instrumentação: o middleware redireciona
+  incondicionalmente sem usuário, logo todo 200 anônimo é prova de que ele não rodou, e
+  /[username], /login, /signup, /health, / e os assets todos servem 200. O /auth/callback
+  responde com a própria lógica e não com o /login do middleware, então o fluxo de troca de
+  code está intacto. O guard de layout não aparece no diff em nenhuma forma — a proibição
+  central do epic foi respeitada. E o mais importante: o @dev declarou que o dashboard
+  autenticado "nunca foi renderizado", então eu o renderizei. Criei usuário de probe, fiz
+  login pelo caminho real do produto, montei o cookie no formato do @supabase/ssr e servi as
+  três rotas do dashboard com 200. Depois expirei o access_token deixando o refresh_token
+  válido e provei o refresh proativo: Set-Cookie novo, token diferente do original,
+  expires_at no futuro, 200 sem cair para /login. A AC5 deferida da Story 2.9 está fechada
+  com prova de comportamento. Renderizei também os 3 temas, alterando profiles.theme entre
+  eles: zero recursos externos em qualquer um.
+
+  SOBRE A CSP, MEU JULGAMENTO SE DIVIDE. A decisão de ESCOPO está certa e é a única
+  defensável: se a CSP morasse no middleware, ela cobriria só /dashboard/* e deixaria
+  /[username] descoberta — justamente a rota anônima que renderiza avatar_url arbitrário e
+  URLs de links fornecidas pelo usuário. Proteger o dashboard e expor a página pública seria
+  o inverso do que a superfície de risco pede; os 4 headers estão em 8/8 rotas, inclusive
+  assets, em enforce. O 'unsafe-inline' NÃO é regressão disfarçada: o baseline era ausência
+  total de CSP, e a policy entrega object-src 'none', base-uri 'self', form-action 'self' e
+  frame-ancestors 'none', que são controles reais e independentes dele. Mas seria desonesto
+  parar aí: script-src com 'unsafe-inline' não mitiga XSS, que é a função pela qual a CSP é
+  conhecida — o ganho está nos outros diretivos. E a JUSTIFICATIVA registrada está errada em
+  dois pontos que verifiquei: o App Router NÃO "exigiria de qualquer forma" (nonce via
+  middleware é padrão de primeira classe do Next, com propagação para os scripts do RSC), e
+  o argumento de que o nonce quebraria o ISR defende um cache que não existe — /[username]
+  responde no-store e /dashboard/* já é dinâmico. A decisão é aceitável; o registro dela,
+  num projeto cujo propósito é ensinar, não é. Isso é a issue #2, e é de documentação, não
+  de código. O img-src https: eu mantenho: avatar_url é feature contratada, sem ele todo
+  avatar externo quebra em silêncio, e o custo é privacidade, não execução de script.
+
+  SOBRE O PEPPER FAIL-FAST, ENCONTREI QUE A DOCUMENTAÇÃO DESCREVE UM COMPORTAMENTO QUE O
+  CÓDIGO NÃO TEM. O comentário afirma que sem o env "o app não sobe" e "quebra ruidosamente
+  no boot". Testei removendo o env com NODE_ENV=production: o build passa com exit 0, o
+  servidor sobe, e /, /login, /signup, /health e /[username] respondem sem um único erro no
+  log. Só quando invoquei a Server Action de login DE VERDADE, com o header Next-Action e o
+  id extraído do HTML, veio o 500 e o erro apareceu. O Next carrega módulos de Server Action
+  sob demanda, então o throw de topo de módulo nunca roda no boot. A consequência prática é
+  ruim: um deploy mal provisionado fica com todos os sinais verdes — build, deploy,
+  homepage, página pública, /health — enquanto login, signup, reset e tracking devolvem 500,
+  e monitoração de disponibilidade de página não vê nada. Respondendo diretamente à pergunta:
+  o PRINCÍPIO está certo e eu o endosso, porque um controle de segurança degradado em
+  silêncio é pior que uma falha alta; mas a IMPLEMENTAÇÃO está no pior lugar possível, tarde
+  demais para impedir o deploy ruim e cedo demais para ser inofensiva. No caso de má
+  configuração o modo de falha é sim pior que o problema original — lockout de IPs
+  escolhidos por um atacante versus queda total de auth sem atacante nenhum. O que salva a
+  escolha é que a condição é determinística, de provisionamento único e já bloqueante de
+  merge. A correção é barata e estritamente melhor que ambas as alternativas: validar o env
+  no BUILD, para que o deploy ruim não embarque, deixando o throw como backstop que nunca
+  dispara. Issue #1.
+
+  O ACHADO DE ISR DO @dev PROCEDE E É DÉBITO DE PROJETO. Refiz o A/B por conta própria,
+  movendo fisicamente middleware.ts e next.config.ts para fora e rebuildando: /[username]
+  aparece como ƒ nos DOIS cenários. Somado a app/[username]/ não constar do diff da branch,
+  a createPublicClient() não ler cookies e a nenhum componente da árvore importar
+  next/headers, a conclusão é segura: a rota declara revalidate = 60 e responde no-store, e
+  isso é anterior ao Epic 6. Não penalizo a 6.5 por um defeito que ela apenas tornou
+  visível; registro como issue #3 para @architect, consolidada com o concern #2 da Wave 1,
+  que este achado provavelmente explica.
+
+  A DEPRECAÇÃO middleware.ts → proxy.ts é warning, não erro, e o middleware funciona
+  integralmente — mas tem uma propriedade desagradável que merece registro: numa major
+  futura o convention deixa de ser reconhecido e o middleware para de rodar sem quebrar
+  build, typecheck ou os 9 testes unitários, que importam '@/middleware' diretamente em vez
+  de passar pelo roteador. O guard edge sumiria em silêncio. É exatamente o cenário para o
+  qual o AC3 existe: o guard de layout seguraria o acesso, e a perda seria de otimização e
+  de refresh, não de controle. Isso valida a decisão de defense-in-depth de um jeito que nem
+  a story previu. Follow-up de baixa prioridade, com story própria, fora do fim de epic.
+
+  DECLARO EXPLICITAMENTE O QUE NÃO CONSEGUI VERIFICAR. Eu TAMBÉM não tenho browser
+  conectado — list_connected_browsers retornou [] para mim como retornou para o @dev. A AC7,
+  na redação literal "o console do browser está limpo", permanece NÃO VERIFICADA POR
+  OBSERVAÇÃO DIRETA, e não vou classificar como verificado aquilo que não observei. Classifico
+  o gap residual como LOW, não medium, e o fundamento é este: o risco concreto é uma CSP
+  bloquear recurso que o browser tenta carregar, e a superfície inteira desses recursos está
+  agora enumerada no HTML REALMENTE SERVIDO das rotas públicas E das autenticadas, nos 3
+  temas — zero script ou stylesheet externo, zero host externo em posição de recurso, zero
+  img externo, atributos style cobertos, SVG inline sem recurso externo. O que resta fora de
+  alcance é estreito e o nomeio: comportamento que só existe em runtime de browser, como um
+  eval dentro de chunk exercitado apenas por interação, ou requisição disparada por evento —
+  sendo que connect-src já libera o único destino de rede do produto. Recomendo fechar
+  pós-merge, com 10 minutos de console aberto incluindo um drag de link e uma troca de
+  período no gráfico, consolidado com as verificações pós-deploy pendentes das Waves 1 e 2.
+
+  GATES REPRODUZIDOS DO ZERO: typecheck exit 0, lint exit 0, build exit 0, pnpm dev sobe em
+  143ms, e a suíte deu 42 arquivos passed + 1 skipped, 317 testes passed + 1 skipped em
+  32.87s. O baseline alegado de 317 BATE EXATAMENTE — diferente da Wave 3, onde a
+  discrepância exigiu investigação. Progressão do projeto: 192 (Epic 5) → 219 (W1) → 233
+  (W2) → 296 (W3) → 317 (W4).
+
+next_actions:
+  - owner: "@devops"
+    action: >-
+      BLOQUEANTE PARA O MERGE — provisionar RATE_LIMIT_PEPPER (openssl rand -hex 32, valor
+      distinto por ambiente, server-only, nunca NEXT_PUBLIC_*) em production E preview na
+      Vercel ANTES do merge. Reforçado por este gate: sem o env a auth inteira retorna 500
+      com todos os health checks verdes.
+  - owner: "@dev"
+    action: >-
+      PRIORITÁRIO (issue #1) — mover a validação do pepper para o BUILD (check em
+      next.config.ts ou preflight de CI que faça `next build` falhar sem o env em
+      produção), e corrigir o comentário de lib/rate-limit.ts, que hoje descreve um
+      comportamento que o código não tem ("o app não sobe" é falso — provado).
+  - owner: "@dev / @architect"
+    action: >-
+      Issue #2 — reescrever a justificativa do `unsafe-inline` em next.config.ts e nas
+      Completion Notes da 6.5. Remover as duas afirmações incorretas (App Router "exigiria
+      de qualquer forma"; nonce quebraria o ISR) e assumir o enquadramento honesto de
+      escolha por simplicidade, com o custo declarado.
+  - owner: "@architect"
+    action: >-
+      Issue #3 — investigar por que `/[username]` responde no-store apesar de
+      `revalidate = 60`, e decidir se o NFR1 será cumprido ou formalmente renegociado.
+      Consolidar com o concern #2 da Wave 1, que este achado provavelmente explica.
+  - owner: "@devops"
+    action: >-
+      Push da branch + PR (exclusivo). Após o merge, UMA sessão de verificação consolidando:
+      console do browser nas 5 rotas × 3 temas com um drag e uma troca de período (AC7,
+      issue #8), curl em /[username] real, clique real num link e conferência no dashboard
+      de analytics (concerns pendentes das Waves 1, 2 e 3).
+  - owner: "@dev / @po"
+    action: "Issue #4 — decidir sobre o `?next=`: implementar o redirect pós-login com validação de path local, ou remover o parâmetro das duas camadas e ajustar os comentários."
+  - owner: "@dev"
+    action: "Issue #6 — endurecer a validação de `next` em app/auth/callback/route.ts contra `/\\` (preferir new URL(next, origin) + comparação de origin). Pré-existente da Story 2.5, mas é o epic de segurança."
+  - owner: "@sm / @dev"
+    action: "Issue #5 — story própria para migrar middleware.ts → proxy.ts (Next 16.2.6), arrastando routing.md §6 e os imports de tests/unit/middleware.test.ts. NÃO no fim deste epic."
+  - owner: "@qa (wave futura)"
+    action: "Issue herdada #5 — confirmar que tests/integration/rate-limit-app-path.test.ts contém trava asserindo 42501 na primitiva e 22023 para bucket fora da allowlist. Não auditado por este gate."
+  - owner: "@data-engineer"
+    action: "Revisão formal de DDL, pendente desde a Wave 2 e agora incluindo check_app_rate_limit. A DDL anterior rendeu um achado HIGH — não tratar como formalidade."

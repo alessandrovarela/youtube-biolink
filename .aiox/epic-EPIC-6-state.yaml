@@ -1,0 +1,108 @@
+epic_state:
+  epicId: EPIC-6
+  execution_plan: docs/stories/epics/epic-6/EPIC-6-EXECUTION.yaml
+  mode: yolo
+  started_at: "2026-07-19"
+  updated_at: "2026-07-19"
+  status: completed_pending_merge
+  branch: feature/epic-6-security
+
+  current_wave: 4
+  total_waves: 4
+
+  prerequisites:
+    PRE-1: { status: completed, owner: "@architect", artifact: "docs/architecture/security-epic-6.md" }
+    PRE-2: { status: completed, owner: "@data-engineer", artifact: "docs/architecture/epic-6-data-access-inventory.md" }
+    PRE-3: { status: cancelled, reason: "admin client refutado pelo ADR; sem SERVICE_ROLE. Substituido por RATE_LIMIT_PEPPER na 6.4" }
+
+  waves:
+    1:
+      name: "RLS Foundation"
+      status: completed
+      stories:
+        "6.1": { status: completed, executor: "@dev", quality_gate: "@data-engineer" }
+        "6.2": { status: completed, executor: "@dev", quality_gate: "@data-engineer" }
+    2:
+      name: "Tracking Hardening"
+      status: completed
+      stories:
+        "6.3": { status: completed, executor: "@dev", quality_gate: "@qa" }
+    3:
+      name: "Rate Limiting"
+      status: completed
+      stories:
+        "6.4": { status: completed, executor: "@dev", quality_gate: "@qa", note: "issue HIGH do gate corrigido em migration de hardening" }
+    4:
+      name: "Edge & Polimento"
+      status: completed
+      stories:
+        "6.5": { status: completed, executor: "@dev", quality_gate: "@qa" }
+        "6.6": { status: completed, executor: "@dev", quality_gate: "@ux-design-expert", note: "AC7 (validacao visual) pendente de humano" }
+
+  gate_verdicts:
+    1: { status: approved, agent: "@data-engineer", artifact: "docs/qa/gates/epic-6-wave-1-gate.yml", blocking: 0 }
+    2: { status: concerns, agent: "@qa", artifact: "docs/qa/gates/epic-6-wave-2-gate.yml", blocking: 0 }
+    3: { status: concerns, agent: "@qa", artifact: "docs/qa/gates/epic-6-wave-3-gate.yml", blocking: 0, note: "1 HIGH levantado e corrigido" }
+    4: { status: concerns, agent: "@qa", artifact: "docs/qa/gates/epic-6-wave-4-gate.yml", blocking: 0 }
+    4-design: { status: concerns, agent: "@ux-design-expert", artifact: "docs/qa/gates/epic-6-wave-4-design-gate.yml", blocking: 0 }
+    final: { status: pass_with_concerns, agent: "@qa", artifact: "docs/qa/gates/epic-6-final-gate.yml" }
+
+  metrics:
+    commits: 42
+    migrations: 5
+    tests: { before: 192, after: 333 }
+    gates: { typecheck: pass, lint: pass, test: "333 passed / 1 skipped", build: pass }
+
+  decisions:
+    - id: "DEC-1"
+      raised_by: "@qa (gate wave 2)"
+      resolved_by: "@architect (emenda 1 do ADR) + @pm (escolha final)"
+      status: resolved
+      summary: >-
+        Rate limiting na Server Action nao fechava click inflation (RPC
+        chamavel direto no PostgREST, provado por curl). Teto movido para
+        dentro da RPC chaveado por link_id. @pm descartou a camada 3
+        (app-proof): seguranca identica, so compraria folga para link viral
+        ao custo de segredo semeado a mao em 2 ambientes.
+
+  # ──────────────────────────────────────────────────────────
+  # BLOQUEIA O MERGE — @devops (ver docs/qa/gates/epic-6-final-gate.yml)
+  # ──────────────────────────────────────────────────────────
+  merge_preconditions:
+    - id: "PRE-M1"
+      severity: blocking
+      task: >-
+        RATE_LIMIT_PEPPER como secret de REPOSITORIO no GitHub Actions (NAO
+        de environment). O job `quality` nao declara `environment:`, entao um
+        secret escopado ao environment production fica invisivel, a CI falha,
+        e como `migrate-production` tem `needs: quality` as migrations NAO
+        aplicam — main mergeada com codigo novo e schema velho.
+    - id: "PRE-M2/M3"
+      severity: blocking
+      task: "RATE_LIMIT_PEPPER na Vercel em Production E Preview (valores distintos)."
+    - id: "PRE-M4"
+      severity: blocking
+      task: >-
+        NEXT_PUBLIC_SUPABASE_URL disponivel em BUILD-TIME (a CSP passou a
+        depender dele; ausente, connect-src vira 'self' e o login quebra no
+        browser sem erro de servidor).
+    - id: "PRE-M5/M6"
+      severity: blocking
+      task: "Secrets do CD e dos testes de integracao da CI validos."
+    - id: "PRE-M7"
+      severity: high
+      task: >-
+        Verificacao POS-DEPLOY (nao opcional): o rate limiting depende do
+        owner das funcoes SECURITY DEFINER ter BYPASSRLS em producao. Em dev
+        e fato, em prod e inferencia, e o modo de falha e silencioso (o
+        exception engole, o limiter libera, nada fica vermelho). Checklist de
+        7 sondas no final gate.
+    - id: "PRE-M9"
+      severity: medium
+      task: "Tag v0.1.0 na main ANTES do merge (marca o MVP; Epic 6 e pos-MVP). Irreversivel."
+
+  owner_pending:
+    - "OWN-1: rodar docs/smoke-test.md (roteiro ATUALIZADO com 9 passos, inclui AC7 visual e rate limiting por ultimo)"
+    - "OWN-2: 3 reproducoes externas do setup local"
+    - "OWN-3: tag v0.1.0 + PRD para 1.0"
+    - "HD-1: validacao visual dos 3 temas (AC7 da 6.6) — nenhum agente conseguiu, extensao de browser desconectada"

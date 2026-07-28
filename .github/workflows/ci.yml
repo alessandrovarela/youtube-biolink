@@ -52,8 +52,25 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-
 
+      # Preflight de provisionamento (issue #1 do gate da Wave 4).
+      # O gate autoritativo é `assertProductionEnv()` em next.config.ts, que faz o
+      # `next build` abaixo FALHAR sem os envs. Este passo roda ANTES só para dar a
+      # mensagem crua e um log legível — um build vermelho por env ausente não deve
+      # exigir arqueologia de stack trace. Se um dos dois for removido, o outro segura.
+      - name: Preflight — required production env
+        env:
+          RATE_LIMIT_PEPPER: ${{ secrets.RATE_LIMIT_PEPPER }}
+        run: |
+          if [ -z "${RATE_LIMIT_PEPPER}" ]; then
+            echo "::error::RATE_LIMIT_PEPPER ausente. Sem ele o subject dos buckets de auth é sha256(\":\"+ip) — computável por qualquer um — e um atacante nega login a IPs arbitrários (lockout). Provisione o secret no GitHub e as env vars em production E preview na Vercel (openssl rand -hex 32, server-only, NUNCA NEXT_PUBLIC_*, valor distinto por ambiente)."
+            exit 1
+          fi
+          echo "RATE_LIMIT_PEPPER presente (${#RATE_LIMIT_PEPPER} chars)."
+
       - name: Build
         run: pnpm build
+        env:
+          RATE_LIMIT_PEPPER: ${{ secrets.RATE_LIMIT_PEPPER }}
 
   # ────────────────────────────────────────────────────────────
   # CD — aplica migrations em produção após merge na main.

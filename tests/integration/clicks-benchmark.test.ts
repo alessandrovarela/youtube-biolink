@@ -22,7 +22,6 @@ if (!enabled) {
 
 suite('Story 5.4 — benchmark 10k cliques', () => {
   const admin = hasServiceRole() ? createAdminClient() : null;
-  const anon = hasServiceRole() ? createAnonClient() : null;
   const createdUserIds: string[] = [];
 
   afterAll(async () => {
@@ -41,6 +40,15 @@ suite('Story 5.4 — benchmark 10k cliques', () => {
     const profileId = data.user!.id;
     createdUserIds.push(profileId);
 
+    // Story 6.3: a view link_click_daily é security_invoker e o anon perdeu os grants.
+    // O benchmark precisa medir o caminho REAL do dashboard → role `authenticated`.
+    const asOwner = createAnonClient();
+    const { error: signInErr } = await asOwner.auth.signInWithPassword({
+      email: u.email,
+      password: u.password,
+    });
+    expect(signInErr).toBeNull();
+
     // 5 links, 2k cliques cada (10k), espalhados por 90 dias.
     const linkIds: string[] = [];
     for (let i = 0; i < 5; i++) {
@@ -56,14 +64,14 @@ suite('Story 5.4 — benchmark 10k cliques', () => {
     }
 
     // Warm-up (evita contar o custo do primeiro round-trip / plan cache).
-    await getClicksByLink(anon!, profileId);
+    await getClicksByLink(asOwner, profileId);
 
     const t0 = performance.now();
-    const totals = await getClicksByLink(anon!, profileId);
+    const totals = await getClicksByLink(asOwner, profileId);
     const tByLink = performance.now() - t0;
 
     const t1 = performance.now();
-    const series = await getDailyClicks(anon!, profileId, 30);
+    const series = await getDailyClicks(asOwner, profileId, 30);
     const tDaily = performance.now() - t1;
 
     const grandTotal = totals.reduce((s, t) => s + t.total, 0);

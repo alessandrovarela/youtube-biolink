@@ -1,0 +1,603 @@
+epic: EPIC-6
+wave: 2
+title: "Tracking Hardening (RLS em link_clicks + view link_click_daily + RPC) — Quality Gate"
+gate_agent: "@qa (Quinn)"
+date: "2026-07-19"
+branch: "feature/epic-6-security"
+commit: "d69c97e"
+verdict: CONCERNS
+
+# ── Resultado por story ─────────────────────────────────────
+stories:
+  - id: "6.3"
+    title: "RLS em link_clicks + hardening da view link_click_daily + refactor do tracking"
+    verdict: CONCERNS
+    acs_met: "18/18"
+    note: >-
+      Todas as 18 ACs verificadas de forma independente por este gate (probes próprias
+      com a anon key crua + leitura direta do catálogo, não os números do @dev). O
+      veredito é CONCERNS, não PASS, por um achado adversarial do gate: o débito de
+      click inflation carregado para a 6.4 tem uma MITIGAÇÃO PLANEJADA QUE NÃO O FECHA
+      (concern #1). Nada disso é regressão nem bloqueia o merge desta wave.
+
+# ── Item 1: PROBES REPRODUZIDAS PELO GATE ───────────────────
+# Executadas pelo @qa com curl e a anon key crua de .env.local contra o PostgREST de
+# development — exatamente o que um atacante de posse da anon key faria. NÃO são os
+# números reportados pelo @dev; foram reproduzidas do zero.
+adversarial_probes:
+  target: "rjsvkwjgsctqsswrospx (youtube-biolink-dev) — PostgREST"
+  method: "curl + anon key crua (NEXT_PUBLIC_SUPABASE_ANON_KEY)"
+  results:
+    - probe: "GET /rest/v1/link_click_daily?select=*&limit=3"
+      http: 401
+      body: '{"code":"42501","message":"permission denied for view link_click_daily"}'
+      verdict: PASS
+      closes: "concern #1 do gate da Wave 1 — vazamento ATIVO. Antes: HTTP 200 com a agregação de TODOS os perfis."
+    - probe: "GET /rest/v1/link_clicks?select=*&limit=3"
+      http: 200
+      body: "[]"
+      verdict: PASS
+      note: "RLS não erra — a linha simplesmente não existe para a role anon (sem policy TO anon). AC4."
+    - probe: "POST /rest/v1/link_clicks (link_id arbitrário)"
+      http: 401
+      body: '{"code":"42501","message":"permission denied for table link_clicks"}'
+      verdict: PASS
+      closes: "🔴 CONCERN MEDIUM DO GATE DO EPIC 5 — FECHADO E PROVADO. AC3."
+    - probe: "DELETE /rest/v1/link_clicks?link_id=neq.<uuid>"
+      http: 401
+      body: "permission denied for table link_clicks"
+      verdict: PASS
+    - probe: "PATCH /rest/v1/link_clicks?link_id=neq.<uuid> (UPDATE em massa)"
+      http: 401
+      body: "permission denied for table link_clicks"
+      verdict: PASS
+      note: "Probe ADICIONAL do gate (o @dev não reportou UPDATE). Append-only é real."
+    - probe: "POST /rest/v1/rpc/record_link_click (link inexistente)"
+      http: 200
+      body: "false"
+      verdict: PASS
+      note: "No-op silencioso, não lança. AC9."
+    - probe: "POST /rest/v1/link_click_daily (INSERT na view)"
+      http: 500
+      body: '{"code":"55000","message":"cannot insert into view — Views containing GROUP BY are not automatically updatable"}'
+      verdict: PASS_WITH_NOTE
+      note: >-
+        Probe ADICIONAL do gate. A escrita falha, mas por NÃO-ATUALIZABILIDADE (55000) e
+        não por privilégio (42501) — o Postgres checa updatability antes do ACL. Efeito
+        prático nulo (a view é agregada, jamais será atualizável), mas a mensagem confirma
+        a existência e a forma da view a um anônimo. Ver concern #4.
+  conclusion: >-
+    Os dois furos contratados estão FECHADOS e provados por este gate de forma
+    independente. Nenhuma probe passou onde deveria falhar.
+
+# ── Item 2: AUDITORIA DA RPC COMO SUPERFÍCIE DE ATAQUE ──────
+# record_link_click é SECURITY DEFINER com `grant execute to anon` — ou seja,
+# executável por QUALQUER pessoa na internet. Auditada vetor a vetor.
+rpc_attack_surface_audit:
+  function: "public.record_link_click(p_link_id uuid, p_user_agent_short text)"
+  catalog_verified_by_gate:
+    prosecdef: true
+    proconfig: "{search_path=public}"
+    owner: postgres
+    proacl: "{postgres=X/postgres, anon=X/postgres, authenticated=X/postgres, service_role=X/postgres}"
+    public_execute_present: false
+    note: >-
+      Lido pelo gate via Management API. A AUSÊNCIA da entrada `=X/postgres` (PUBLIC)
+      prova que o `revoke all ... from public` pegou. Contraste didático confirmado:
+      handle_new_user() e set_updated_at() AINDA têm `=X/postgres`.
+  vectors:
+    - vector: "SQL injection via p_link_id ou p_user_agent_short"
+      result: NOT_EXPLOITABLE
+      why: >-
+        plpgsql sem NENHUM SQL dinâmico (zero EXECUTE / format / concatenação). Os dois
+        parâmetros são tipados (uuid, text) e usados exclusivamente como valores de bind.
+        Um p_link_id não-uuid é rejeitado pelo próprio parser antes de entrar na função.
+    - vector: "search_path hijack (schema temporário com uma tabela `links` falsa)"
+      result: DENIED
+      why: "`set search_path = public` fixo na função, confirmado no catálogo (proconfig). Mesmo padrão de handle_new_user."
+    - vector: "Inserir clique em link de OUTRO usuário"
+      result: ALLOWED_BY_DESIGN
+      why: >-
+        É o requisito. O clicador é um visitante anônimo na página pública de outra
+        pessoa — a RPC PRECISA gravar em link de terceiro. Não é escalada: a função só
+        insere em link_clicks, valida is_active no banco, e o resultado continua sujeito
+        a link_clicks_select_own na leitura (só o dono lê). O privilégio elevado cobre
+        UMA operação e não sai do banco.
+    - vector: "user_agent gigante (payload de 500 chars / MBs) estourando o CHECK ou DoS de storage"
+      result: MITIGATED
+      why: >-
+        `left(p_user_agent_short, 120)` trunca DENTRO da função, em paridade com o CHECK
+        da Story 5.1 — um chamador direto da RPC não consegue estourar o CHECK nem gravar
+        mais que 120 chars. Provado por teste dedicado (link-clicks-rls.test.ts:248) e
+        reproduzido: 500 chars → linha com length exatamente 120. O corpo da requisição
+        ainda trafega inteiro até o Postgres, mas isso é limite do PostgREST/Kong, não
+        desta função.
+    - vector: "Enumeração de link_ids válidos/ativos pelo retorno boolean (oracle)"
+      result: NOT_A_LEAK
+      why: >-
+        Analisado e DESCARTADO por duas razões independentes. (1) link_id é uuid v4 —
+        enumerar é 2^122, inviável. (2) Mais importante: o boolean não vaza NADA de novo,
+        porque `links_select_public_active` (Story 6.2) já permite ao anon LISTAR todos os
+        links ativos via GET /rest/v1/links. O oracle entrega estritamente MENOS que o que
+        já é público por design. Bônus: link inexistente e link inativo colapsam ambos em
+        `false`, então NÃO há oracle que distinga "não existe" de "existe mas está
+        desativado" — os links inativos continuam invisíveis. Desenho correto.
+    - vector: "DoS / click inflation por repetição contra um link ativo legítimo"
+      result: OPEN_BY_DESIGN
+      why: >-
+        Único vetor que permanece aberto, e está explicitamente no OUT da story. PROVADO
+        POR ESTE GATE — ver concern #1, que é o achado central deste gate: a mitigação
+        planejada não fecha o caminho que o gate demonstrou.
+  verdict: >-
+    A RPC está CORRETAMENTE ENDURECIDA. Os três controles obrigatórios do ADR-001 § 4
+    (search_path fixo, revoke de PUBLIC, grant explícito e mínimo) estão aplicados e
+    foram confirmados no catálogo pelo gate. Nenhum vetor de escalada de privilégio,
+    injeção ou vazamento. O único risco residual é volumétrico (inflation), não de
+    confidencialidade nem de integridade de esquema.
+
+# ── Item 3: contrato fire-and-forget preservado ─────────────
+contract_preservation:
+  file: "lib/actions/track-click.ts"
+  never_throws:
+    status: PASS
+    why: >-
+      Corpo inteiro dentro de try/catch com `catch { return { ok:false, ... } }` como
+      guarda de último recurso. Os três caminhos de falha (input inválido, error da RPC,
+      data !== true) RETORNAM ActionResult — nenhum `throw`. `git diff main` confirma que
+      o try/catch não foi tocado pelo refactor.
+  navigation_never_blocked:
+    status: PASS
+    why: >-
+      Falha de rede/RPC vira `{ ok:false }`, nunca exceção. O contrato de retorno
+      (ActionResult) é idêntico ao anterior — o caller não tem como perceber a mudança.
+  tracked_link_untouched:
+    status: PASS
+    why: >-
+      components/public/TrackedLink.tsx NÃO está no diff da branch (verificado:
+      `git diff main --name-only | grep -E '^(lib|app|components)/'` retorna APENAS
+      lib/actions/track-click.ts). Ctrl/middle-click e navegação por teclado seguem
+      exatamente como a Story 5.3 os deixou, incluindo o fix do clique fantasma (9dd7935).
+  behavioral_equivalence:
+    status: PASS
+    why: >-
+      Os dois erros antigos ('Link não encontrado' e 'Link inativo') colapsaram em
+      'Link não encontrado ou inativo'. Externamente equivalente: ambos já eram
+      `{ ok:false }` e nenhuma mensagem de tracking é renderizada na UI (fire-and-forget).
+      Fecha, de quebra, o item 9 do inventário (caminho morto), que o gate da Wave 1
+      havia deferido para cá — CONFIRMADO FECHADO.
+  improvement_noted: >-
+    O refactor ELIMINA a janela TOCTOU do SELECT-depois-INSERT (o link podia ser
+    desativado entre as duas queries) e corta 2 round-trips para 1 no caminho crítico
+    da página pública. É ganho de correção E de latência, não só de segurança.
+
+# ── Item 4: analytics sem regressão + qualidade da correção ─
+# A pergunta adversarial: a correção dos testes foi REAL ou mascarada?
+analytics_regression:
+  helpers_under_rls: PASS
+  why: >-
+    getClicksByLink/getDailyClicks funcionam sob RLS com client autenticado — provado
+    pelos testes de integração (que rodam contra o dev real, não mocks) e pela cadeia de
+    grants: `grant select on link_clicks to authenticated` (AC7) + security_invoker na
+    view. O risco R1/R7 ("permission denied for table link_clicks", o erro mais provável
+    de um rollout apressado) NÃO se materializou.
+  test_fix_audit:
+    masked_or_tautological: false
+    verdict: CORRIGIDO CORRETAMENTE — NÃO MASCARADO
+    evidence: >-
+      O gate leu o diff dos três arquivos procurando especificamente pela fraude mais
+      provável: trocar o client anon por createAdminClient() (service role BYPASSA RLS,
+      o que tornaria os testes tautológicos e a RLS não seria exercida). ISSO NÃO
+      ACONTECEU. Os três arquivos autenticam DE VERDADE via
+      `createAnonClient()` + `signInWithPassword()` → JWT real → role Postgres
+      `authenticated`, que é o caminho REAL do produto
+      (app/dashboard/analytics/page.tsx usa createServerClient() com cookie de sessão).
+      O service role aparece apenas em setup/teardown e em releituras AUTORITATIVAS de
+      estado — uso correto e necessário (a verificação do estado final não pode depender
+      das policies que estão sob teste).
+    strongest_evidence: >-
+      clicks-aggregation.test.ts:125 — o teste de isolamento passou a criar DOIS clients
+      autenticados independentes (asA e asB) e verifica simetria nos dois sentidos. Antes
+      era um único client anon com filtro app-layer. E link-clicks-rls.test.ts:177 pede
+      `select('id, link_id')` SEM FILTRO app-layer NENHUM: se a policy falhar, o clique de
+      B aparece e o teste quebra. Isso é um teste REAL de RLS — antes era app-layer.
+  app_layer_preserved_nfr3: PASS
+  app_layer_note: >-
+    lib/analytics/clicks.ts NÃO foi tocado; o filtro `.in('link_id', linkIds)` e o
+    `.eq('profile_id', profileId)` continuam no lugar. Defense-in-depth mantida: a RLS
+    SOMOU uma barreira, não substituiu a app-layer. Único arquivo de runtime no diff da
+    branch inteira: lib/actions/track-click.ts.
+
+# ── Item 5: isolamento cross-user (os 3 caminhos) ───────────
+cross_user_isolation:
+  via_table:
+    result: ISOLATED
+    why: "link_clicks_select_own (única policy, lida do catálogo pelo gate) exige EXISTS em links com l.profile_id = (select auth.uid()). A não vê cliques de B."
+  via_view:
+    result: ISOLATED
+    why: "security_invoker = on faz a view rodar sob a RLS do chamador; o count(*) passa a ser calculado apenas sobre as linhas VISÍVEIS. anon perdeu TODOS os grants na view."
+  via_rpc:
+    result: NOT_A_READ_PATH
+    why: "record_link_click retorna boolean e não devolve dado nenhum de link_clicks. Não há caminho de leitura por ela."
+  via_service_role:
+    result: OUT_OF_RUNTIME
+    why: "SUPABASE_SERVICE_ROLE_KEY não é usada pelo app Next.js — confirmado: só aparece em tests/integration/helpers/admin.ts. .env.example anotado (AC14)."
+  verdict: "PASS — nenhum caminho de leitura cross-user encontrado nos três vetores."
+
+# ── Item 6: segurança da migration para o CD de produção ────
+migration_safety:
+  file: "supabase/migrations/20260719180000_link_clicks_rls.sql"
+  atomicity: "PASS — policy, RPC, grants, hardening da view e ENABLE ROW LEVEL SECURITY no MESMO arquivo (decisão #5a). Roda em transação: não existe janela com RLS ligada sem as regras que a tornam usável (risco R6 fechado)."
+  ordering: "PASS — 20260719180000 > 20260719171040 > 20260719170252 > 20260702120000 (última em prod). Aplicação lexicográfica correta."
+  pgrst_reload: "PASS — notify pgrst, 'reload schema' ao final (AC8)."
+  destructive_statements: none
+  rollback: "Trivial e sem perda de dados — DROP POLICY, ALTER TABLE DISABLE RLS, ALTER VIEW SET (security_invoker = off), DROP FUNCTION, re-GRANT. Nenhuma linha é alterada ou apagada."
+  # PREFLIGHT DE PRODUÇÃO EXECUTADO POR ESTE GATE (Management API)
+  production_preflight:
+    project: "bmyijncgsiubufwhttul (youtube-biolink-prod)"
+    migrations_applied: 5
+    latest_version: "20260702120000"
+    link_click_daily: { exists: true, owner: postgres, reloptions: null, rowsecurity: false }
+    link_clicks: { exists: true, owner: postgres, rowsecurity: false }
+    current_grants_anon_link_click_daily: "INSERT,SELECT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER"
+    current_grants_anon_link_clicks: "INSERT,SELECT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER"
+    leak_confirmed_live_in_prod: true
+    verdict: >-
+      PASS — a migration aplicará LIMPO. A view existe em prod com owner postgres e
+      reloptions null (o ALTER VIEW é válido); os grants que a migration revoga existem
+      de fato (o REVOKE não é no-op nem erro). Estado pré-merge idêntico ao que a
+      migration assume.
+      CONFIRMAÇÃO INDEPENDENTE E GRAVE: o vazamento da view e o INSERT anônimo em
+      link_clicks estão AMBOS ATIVOS EM PRODUÇÃO NESTE MOMENTO (anon tem
+      INSERT/SELECT/UPDATE/DELETE/TRUNCATE nas duas relações e a view não tem
+      security_invoker). Isso REFORÇA a urgência do merge — a Wave 2 não introduz risco,
+      ela remove um risco que está de pé hoje.
+  analytics_break_risk_in_prod:
+    result: LOW
+    why: >-
+      O analytics de produção já roda como `authenticated` (createServerClient com
+      cookie), e o `grant select on link_clicks to authenticated` está na MESMA migration
+      que liga a RLS. Não há janela em que o dashboard fique sem privilégio na tabela base.
+  deploy_ordering_risk: "Ver concern #3 — janela entre a migration e o deploy da Vercel."
+
+# ── Item 7: gates executados PELO GATE (números REAIS) ──────
+gates_run:
+  typecheck: "PASS (exit 0, tsc --noEmit, sem saída)"
+  lint: "PASS (exit 0, eslint, sem saída)"
+  test: "PASS — 37 arquivos passed | 1 skipped (38); 233 testes passed | 1 skipped (234); 12.06s"
+  test_baseline_wave_1: 219
+  test_delta: "+14 (link-clicks-rls.test.ts, o teste-chave do débito)"
+  note: >-
+    Números REPRODUZIDOS independentemente por este gate (pnpm test do zero). Batem
+    EXATAMENTE com o relatado pelo @dev (233/1 skipped, 37 arquivos). Nenhuma
+    discrepância. Progressão do epic: 192 (Epic 5) → 219 (Wave 1) → 233 (Wave 2).
+
+# ── Item 8: julgamento da decisão #1 do @dev ────────────────
+dev_decision_review:
+  decision: >-
+    Não editar o cabeçalho de 20260702120000_link_click_daily.sql (migration já aplicada
+    em development E em produção), corrigindo a afirmação falsa ("a leitura de analytics
+    usa a anon key") em dois lugares vivos: o bloco 3 da migration nova e a seção
+    link_click_daily de docs/architecture/ER.md.
+  qa_verdict: CONCORDO — É A CHAMADA CERTA
+  reasoning: >-
+    Editar uma migration já aplicada é má prática independentemente do conteúdo. O
+    supabase_migrations.schema_migrations registra a versão aplicada, não o conteúdo do
+    arquivo, então a edição NÃO seria reaplicada em lugar nenhum — o resultado seria um
+    arquivo em git divergindo do que efetivamente rodou nos dois bancos, o que é
+    exatamente o drift que se quer evitar. O ganho seria puramente cosmético (um
+    comentário), e o custo é normalizar "reescrever histórico aplicado" num projeto
+    DIDÁTICO, cujo propósito é ensinar a prática correta. A alternativa escolhida
+    (registrar a correção onde a informação é lida hoje) entrega o mesmo valor
+    informativo com zero risco. Verificado: a correção está de fato escrita nos dois
+    lugares alegados, e é substantiva — explica POR QUE os grants foram dimensionados
+    para `authenticated`.
+  concern_4_wave_1: RESOLVIDO_POR_REREGISTRO
+  concern_4_note: >-
+    Reclassificado de `open` para `resolved`. A imprecisão importava porque a 6.3
+    dimensionaria grants a partir dela — e a 6.3 dimensionou CORRETAMENTE
+    (`authenticated`, não `anon`), que era todo o objetivo do concern. Objetivo atingido.
+
+# ── Rastreabilidade das 18 ACs ──────────────────────────────
+ac_traceability:
+  total: 18
+  met: 18
+  method: "Cada AC verificada por probe própria do gate, leitura de catálogo, leitura de código ou execução de teste — não por leitura do relatório do @dev."
+  blocks:
+    A_rls_link_clicks: "AC1-AC4 — PASS. Migration atômica; 1 policy de SELECT lida do catálogo; ZERO policies de escrita; SELECT anon → []. Probes 2,3,4,5."
+    B_view_hardening:  "AC5-AC8 — PASS. reloptions={security_invoker=on}; anon sem grant algum na view; authenticated com SELECT; grant select em link_clicks para authenticated; notify pgrst presente. Probe 1."
+    C_rpc:             "AC9-AC11 — PASS (AC11 com ressalva de processo, ver concern #5). prosecdef, search_path e proacl sem PUBLIC confirmados no catálogo pelo gate."
+    D_refactor:        "AC12-AC14 — PASS. .rpc() via createPublicClient (nenhum client/env novo); contrato preservado; .env.example anotado."
+    E_tests:           "AC15-AC18 — PASS. Correções auditadas contra mascaramento (ver item 4); teste-chave novo com 14 testes; suíte verde reproduzida."
+
+# ── Conformidade arquitetural ───────────────────────────────
+architectural_conformance:
+  adr_001_followed: true          # RPC SECURITY DEFINER; admin client refutado
+  no_service_role_in_runtime: true
+  policies_and_enable_same_migration: true   # decisão #5a
+  app_layer_preserved: true                  # NFR3 — clicks.ts intacto
+  pm_arbitration_respected: true             # link_clicks_insert_active NÃO implementada
+  select_auth_uid_initplan: true             # (select auth.uid()) no predicado
+  no_invention: true                         # toda AC rastreia PRD / ADR-001 / inventário
+  nfr19_no_raw_ip: true                      # a RPC não recebe nem persiste IP
+
+# ── Qualidade dos testes ────────────────────────────────────
+test_quality:
+  new_tests: 14
+  db_layer: true      # atacam via PostgREST com anon key / JWT real, não mocks
+  adversarial: true   # INSERT/UPDATE/DELETE anônimos, INSERT do próprio dono, view fechada
+  tautological: none
+  masked_fixes: none
+  highlights:
+    - "link-clicks-rls.test.ts:131 — INSERT do PRÓPRIO DONO também é negado. Prova que append-only vale para todos, não só para o anon."
+    - "link-clicks-rls.test.ts:177 — leitura SEM filtro app-layer: teste REAL de RLS, não do .eq()."
+    - "link-clicks-rls.test.ts:248 — truncamento em 120 no banco (chamador direto não estoura o CHECK)."
+    - "link-clicks-rls.test.ts:112 — o teardown por CASCADE prova, de quebra, que a RLS não interfere na integridade referencial."
+  gap_noted: "Nenhum teste cobre a repetição da RPC contra link ativo (inflation) — coerente, é o OUT da story e o escopo da 6.4. Ver concern #1."
+
+# ── Concerns / débitos (nenhum bloqueante) ──────────────────
+concerns:
+  - id: 1
+    severity: medium
+    category: security
+    story: "6.3 → carry-forward 6.4"
+    status: open
+    title: "A mitigação planejada para click inflation NÃO fecha o caminho direto à RPC"
+    description: >-
+      ACHADO CENTRAL DESTE GATE. A story registra corretamente que click inflation
+      permanece aberto e aponta a Story 6.4 (rate limiting) como mitigação. O gate
+      verificou a 6.4 e a mitigação, COMO PLANEJADA, NÃO FECHA O VETOR.
+      A 6.4 aplica `checkRateLimit('track', ...)` DENTRO de `trackLinkClick` — uma
+      Server Action do Next.js (AC11/AC12 da 6.4: "Ponto de aplicação: trackLinkClick").
+      Mas `record_link_click` é `grant execute to anon` e está exposta pelo PostgREST em
+      `POST /rest/v1/rpc/record_link_click`. Um atacante NÃO PRECISA passar pelo Next.js:
+      chama a RPC direto com a anon key pública e o rate limiting da 6.4 nunca é avaliado.
+      Agravante de desenho: o `subject` do bucket `track` é `hash(ip + ':' + linkId)`, e
+      a RPC NÃO TEM ACESSO ao IP do cliente — então a 6.4 não pode simplesmente mover a
+      chamada para dentro de record_link_click sem redesenhar a chave do bucket.
+    proof: >-
+      PROVADO POR PROBE DESTE GATE contra development. Alvo: link ativo real
+      a22e0cf2-62f8-4f08-8372-4570b208015d. Contagem antes: 1. Executadas 20 chamadas
+      curl diretas a POST /rest/v1/rpc/record_link_click com a anon key, sem tocar no
+      app Next.js. Contagem depois: 21 (20 cliques forjados gravados). As 20 linhas da
+      probe foram REMOVIDAS ao final (cleanup HTTP 204) e a contagem voltou a 1 —
+      estado de development restaurado.
+    why_not_blocking: >-
+      Não é regressão: o vetor de inflation já existia antes desta story (e era PIOR — o
+      INSERT direto aceitava link_id ARBITRÁRIO, inclusive inativo e inexistente). A 6.3
+      ESTREITOU o vetor de "qualquer linha em link_clicks" para "apenas links ativos
+      legítimos, uma linha por chamada". É progresso real, e o item está explicitamente
+      no OUT da story. O problema não é a 6.3 — é o plano da 6.4.
+    recommendation: >-
+      @pm / @architect: reavaliar a AC de tracking da Story 6.4 ANTES da implementação.
+      O rate limiting do bucket `track` precisa ser aplicado DENTRO de
+      `record_link_click` (a RPC chamando check_rate_limit), não apenas na Server Action
+      — senão a 6.4 fecha o caminho do app e deixa o caminho direto aberto, dando uma
+      falsa sensação de mitigação. Como a RPC não enxerga o IP, decidir a chave do
+      bucket: (a) o app passa um `p_client_key` já hasheado como parâmetro (atacante
+      direto pode forjá-lo, mas o custo sobe), ou (b) bucket por `linkId` apenas
+      (defensável: limita inflation por link independentemente da origem), ou (c) aceitar
+      formalmente e documentar. Este gate NÃO decide o desenho — sinaliza que a decisão
+      precisa ser tomada de forma consciente e não por omissão.
+  - id: 2
+    severity: low
+    category: security
+    story: "6.3"
+    status: open
+    title: "anon manteve GRANT SELECT em link_clicks — assimetria com a própria filosofia da migration"
+    description: >-
+      O gate leu os grants residuais no catálogo de development:
+      link_clicks → anon: SELECT, REFERENCES, TRIGGER.
+      A migration revoga insert/update/delete/truncate de anon e authenticated (bloco (e),
+      com a justificativa explícita "se um dia alguém adicionar uma policy permissiva por
+      engano, o privilégio ainda não estará lá"), mas NÃO revoga o SELECT de `anon`
+      (herdado do default do Supabase). Resultado: a proteção de ESCRITA contra anon tem
+      duas camadas (RLS + ausência de grant), mas a proteção de LEITURA tem apenas UMA
+      (a RLS). O raciocínio do bloco (e) aplica-se identicamente aqui e não foi aplicado.
+    impact: >-
+      BAIXO e hoje inofensivo — probe do gate confirma GET anônimo em link_clicks → 200
+      com [] (nenhuma policy TO anon existe). É um desvio de menor privilégio e de
+      consistência interna, não uma vulnerabilidade explorável no estado atual.
+    recommendation: >-
+      Adicionar `revoke select on public.link_clicks from anon;` numa migration futura do
+      Epic 6 (a 6.4 já toca DDL e é o veículo natural). Verificar que não quebra nada: o
+      app nunca lê link_clicks como anon (a leitura é do dashboard, `authenticated`; a
+      escrita é a RPC, que roda como owner). Os grants residuais REFERENCES e TRIGGER em
+      ambas as roles são ruído do default do Supabase, sem impacto prático (exigiriam
+      CREATE em schema que essas roles não têm) — revogar junto, por higiene.
+  - id: 3
+    severity: low
+    category: ops
+    story: "6.3"
+    status: action_for_devops
+    title: "Janela não-ordenada entre a migration de produção e o deploy da Vercel"
+    description: >-
+      Diferente das Waves anteriores, esta story acopla uma mudança de banco a uma
+      mudança de CÓDIGO: a partir da migration, o INSERT direto morre e só a RPC grava.
+      O job `migrate-production` (.github/workflows/ci.yml, needs: quality, push na main)
+      e o deploy da Vercel NÃO são ordenados entre si. Nas duas ordens possíveis há uma
+      janela de perda de cliques:
+      (a) migration primeiro → o código ANTIGO ainda em produção faz INSERT direto → 401;
+      (b) deploy primeiro → o código NOVO chama uma RPC que ainda não existe → erro.
+    impact: >-
+      BAIXO e auto-curável. Em AMBOS os casos o efeito é idêntico e benigno: `trackLinkClick`
+      retorna `{ ok:false }`, fire-and-forget, A NAVEGAÇÃO DO VISITANTE NÃO É AFETADA e
+      nenhuma mensagem aparece na UI. O custo é a perda silenciosa de alguns cliques
+      durante a janela (minutos). Nenhum dado é corrompido; nada requer rollback. O
+      analytics NÃO quebra em nenhuma das ordens (ver migration_safety).
+    recommendation: >-
+      @devops: após o merge e o deploy, validar o caminho ponta a ponta em produção —
+      abrir uma página pública real, clicar num link, e confirmar no dashboard de
+      analytics que o clique foi contabilizado. Combinar com o curl do concern #2 do gate
+      da Wave 1 (que continua pendente). Se cliques não aparecerem, o diagnóstico mais
+      provável é o schema cache do PostgREST: o `notify pgrst` está na migration, mas um
+      reload manual pelo painel do Supabase resolve.
+  - id: 4
+    severity: info
+    category: security
+    story: "6.3"
+    status: accepted
+    title: "INSERT anônimo na view retorna 55000 (não-atualizável) em vez de 42501 (permissão)"
+    description: >-
+      Probe adicional do gate: POST /rest/v1/link_click_daily → HTTP 500, código 55000,
+      "Views containing GROUP BY are not automatically updatable". O Postgres avalia
+      updatability ANTES do ACL, então a mensagem confirma a um anônimo que a view existe
+      e que ela contém um GROUP BY.
+    recommendation: >-
+      Sem ação. A escrita é impossível por construção (view agregada), o REVOKE está
+      correto, e o nome da view já é conhecível por quem tem a anon key. Registrado
+      apenas para que a diferença de código não seja confundida com falha de grant numa
+      auditoria futura.
+  - id: 5
+    severity: low
+    category: process
+    story: "6.3"
+    status: open
+    title: "AC11 — revisão de DDL pelo @data-engineer ainda não executada"
+    description: >-
+      A AC11 exige revisão formal de DDL pelo @data-engineer das funções/policies
+      SECURITY DEFINER. A DoD da story registra o item como pendente (o @dev a
+      solicitou; é trabalho de outro agente). Não bloqueia este gate.
+    recommendation: >-
+      Mitigado na prática: ESTE gate executou a auditoria adversarial da superfície de
+      ataque da RPC vetor a vetor (ver rpc_attack_surface_audit) e confirmou os três
+      controles obrigatórios diretamente no catálogo — search_path fixo, PUBLIC revogado
+      (ausência de `=X/postgres` no proacl) e grant explícito mínimo. Nenhum achado. A
+      revisão do @data-engineer, se executada, deve ser confirmatória. @pm: decidir se a
+      AC11 é formalmente dispensada ou se a Wave 2 aguarda a revisão.
+  - id: 6
+    severity: low
+    category: tests
+    story: "6.3"
+    status: accepted
+    title: "Smoke pela UI real não executado"
+    description: >-
+      O smoke do @dev (T8) verificou que `pnpm dev` sobe e que as rotas respondem
+      (200/200/307), mas NÃO houve clique real num link da página pública renderizada nem
+      login no dashboard de analytics pelo navegador — o mesmo débito do concern #5 do
+      gate da Wave 1.
+    recommendation: >-
+      Aceito. A cobertura db-layer usa as formas de query EXATAS do produto e a suíte de
+      integração roda contra o banco de development real (não mocks), incluindo os
+      helpers de analytics com client autenticado. Um clique manual antes do merge
+      continua recomendado — barato e fecha junto com o concern #3.
+
+# ── Concerns herdados da Wave 1 ─────────────────────────────
+inherited_concerns:
+  - id: 1
+    from: "wave-1 #1"
+    title: "view link_click_daily sem security_invoker + grants para anon"
+    status: CLOSED
+    note: >-
+      FECHADO E VERIFICADO POR PROBE INDEPENDENTE DESTE GATE. security_invoker=on
+      confirmado no catálogo; anon sem NENHUM grant na view; GET anônimo → 401
+      "permission denied for view link_click_daily". A recomendação do gate da Wave 1 foi
+      seguida à risca, incluindo o `grant select on link_clicks to authenticated` sem o
+      qual o analytics quebraria.
+  - id: 4
+    from: "wave-1 #4"
+    title: "comentário falso no cabeçalho de 20260702120000_link_click_daily.sql"
+    status: RESOLVED_BY_REREGISTRATION
+    note: "Ver dev_decision_review. Decisão do @dev endossada por este gate; concern reclassificado de open para resolved."
+  - id: 2
+    from: "wave-1 #2"
+    title: "verificação pós-deploy de ISR em produção"
+    status: STILL_OPEN
+    note: "Ação de @devops, não reaberta por esta story. Combinar com o concern #3 desta wave num único passo de verificação pós-merge."
+  - id: 6
+    from: "wave-1 #6"
+    title: "enumeração de usernames via profiles_select_public USING (true)"
+    status: ACCEPTED_BY_DESIGN
+    note: "Não reaberto. Sem relação com esta wave."
+  - id: 9
+    from: "inventory item 9 (deferido pela Wave 1)"
+    title: "caminho morto 'Link inativo' em track-click.ts"
+    status: CLOSED
+    note: "Eliminado pelo refactor: os dois casos colapsam no false da RPC. Verificado no diff."
+
+blocking_issues: []
+
+decision: >-
+  CONCERNS — Wave 2 do Epic 6 (Tracking Hardening) APROVADA PARA MERGE com 6 concerns
+  documentados, NENHUM bloqueante. A Story 6.3 está Done do ponto de vista do quality
+  gate e a branch está liberada para push/PR (@devops).
+
+  O QUE FOI ENTREGUE, PROVADO POR ESTE GATE E NÃO PELO RELATÓRIO DO @dev: as 7 probes
+  adversariais foram reproduzidas do zero com a anon key crua contra o PostgREST de
+  development, e o catálogo foi lido diretamente pela Management API. Os dois furos
+  contratados estão FECHADOS. (1) O concern MEDIUM herdado do gate do Epic 5 —
+  POST /rest/v1/link_clicks com a anon key → 401 permission denied; UPDATE e DELETE
+  idem (probe de UPDATE em massa é adicional deste gate, o @dev não a reportou).
+  A tabela é append-only DE VERDADE agora, e nem o próprio dono escreve direto.
+  (2) O concern #1 do gate da Wave 1, o vazamento ATIVO — GET /rest/v1/link_click_daily
+  anônimo → 401. A view tem security_invoker=on e anon perdeu todos os grants.
+
+  CONFIRMAÇÃO QUE REFORÇA A URGÊNCIA DO MERGE: o preflight de PRODUÇÃO executado por
+  este gate mostra que AMBOS os furos estão ATIVOS EM PROD NESTE MOMENTO — anon tem
+  INSERT/SELECT/UPDATE/DELETE/TRUNCATE em link_clicks E na view, e a view não tem
+  security_invoker. A Wave 2 não introduz risco em produção; ela remove um risco que
+  está de pé hoje. A migration aplicará limpo (a view existe com owner postgres e
+  reloptions null; os grants que ela revoga existem de fato) e o analytics de produção
+  NÃO quebra, porque já roda como `authenticated` e o grant na tabela base está na
+  mesma migration atômica.
+
+  A RPC foi AUDITADA COMO SUPERFÍCIE DE ATAQUE, vetor a vetor, por ser SECURITY DEFINER
+  com grant execute to anon — executável por qualquer pessoa na internet. Injeção de SQL:
+  impossível (plpgsql sem SQL dinâmico, parâmetros tipados usados só como bind).
+  search_path hijack: bloqueado (search_path=public fixo, confirmado em proconfig).
+  Escalada de privilégio: não há (a função só insere em link_clicks e o resultado
+  continua sujeito à RLS na leitura). user-agent gigante: coberto pelo left(...,120)
+  dentro da função. Enumeração pelo retorno boolean: analisado e DESCARTADO — links
+  ativos já são publicamente listáveis por design (links_select_public_active), e
+  inexistente/inativo colapsam ambos em false, sem oracle. Os três controles
+  obrigatórios do ADR-001 § 4 foram confirmados no catálogo, incluindo a AUSÊNCIA da
+  entrada PUBLIC (=X/postgres) no proacl, que prova que o revoke pegou.
+
+  O CONTRATO FIRE-AND-FORGET ESTÁ PRESERVADO. trackLinkClick nunca lança (try/catch
+  intacto, três caminhos de falha retornando ActionResult), a navegação nunca é
+  bloqueada, e TrackedLink.tsx não foi tocado — o diff de runtime da branch inteira é
+  UM arquivo. O refactor ainda elimina a janela TOCTOU e corta 2 round-trips para 1.
+
+  A CORREÇÃO DOS TESTES FOI AUDITADA CONTRA MASCARAMENTO e está CORRETA. O gate
+  procurou especificamente a fraude mais provável — trocar o client anon por
+  createAdminClient(), que bypassa RLS e tornaria os testes tautológicos. NÃO
+  ACONTECEU: os três arquivos autenticam de verdade via signInWithPassword, que é o
+  caminho real do produto. O service role aparece só em setup/teardown e releituras
+  autoritativas. Os testes ficaram MAIS FORTES: o isolamento entre perfis passou a
+  usar dois clients autenticados independentes e a ler SEM filtro app-layer — virou
+  teste REAL de RLS, não do .eq().
+
+  Gates reproduzidos: typecheck exit 0, lint exit 0, 233 testes passed + 1 skipped em
+  37 arquivos (12.06s). Batem EXATAMENTE com o reportado pelo @dev. Progressão do
+  projeto: 192 (Epic 5) → 219 (Wave 1) → 233 (Wave 2).
+
+  POR QUE CONCERNS E NÃO PASS: as 18 ACs estão cumpridas e nada nesta story está
+  errado. O veredito reflete um achado adversarial sobre o FUTURO, não sobre a entrega.
+  O gate provou por probe (20 cliques forjados gravados num link ativo real, via curl
+  direto na RPC, sem tocar no Next.js; estado restaurado depois) que o débito de click
+  inflation carregado para a Story 6.4 tem uma MITIGAÇÃO PLANEJADA QUE NÃO O FECHA: a
+  6.4 aplica rate limiting dentro da Server Action trackLinkClick, mas a RPC é
+  `grant execute to anon` e chamável direto pelo PostgREST, contornando o app inteiro.
+  Pior, a chave do bucket é hash(ip+linkId) e a RPC não enxerga o IP — não dá para só
+  mover a chamada para dentro dela. Deixar isso implícito faria a 6.4 fechar a porta da
+  frente e declarar vitória com a porta dos fundos aberta. A decisão de desenho é do
+  @pm/@architect e precisa ser tomada CONSCIENTEMENTE, antes da implementação da 6.4 —
+  é para isso que este concern existe.
+
+  A decisão #1 do @dev (não editar a migration já aplicada em prod, reregistrando a
+  correção em dois lugares vivos) está CORRETA e endossada: o schema_migrations registra
+  a versão, não o conteúdo, então a edição não seria reaplicada em lugar nenhum e só
+  criaria divergência entre o git e o que rodou nos bancos — num projeto didático, o
+  precedente errado custa mais que o comentário. O concern #4 da Wave 1 fica reclassificado
+  como resolvido por reregistro.
+
+next_actions:
+  - owner: "@pm / @architect"
+    action: "PRIORITÁRIO — reavaliar a AC de tracking da Story 6.4 antes da implementação: o rate limiting do bucket `track` precisa alcançar o caminho DIRETO à RPC (PostgREST), não só a Server Action. Decidir a chave do bucket, já que a RPC não enxerga o IP. Ver concern #1."
+  - owner: "@devops"
+    action: "Push da branch + PR. Após o merge e o deploy, verificação pós-deploy ÚNICA cobrindo concern #3 desta wave e concern #2 da Wave 1: curl em /[username] real → 200, mais um clique real num link seguido de conferência no dashboard de analytics."
+  - owner: "@data-engineer"
+    action: "AC11 — revisão formal de DDL das duas funções SECURITY DEFINER, se o @pm não a dispensar. Este gate já auditou e não encontrou achados; espera-se revisão confirmatória. Ver concern #5."
+  - owner: "@dev (Story 6.4)"
+    action: "Incluir `revoke select on public.link_clicks from anon;` (e, por higiene, REFERENCES/TRIGGER das duas relações) na migration da 6.4 — fecha o concern #2 e restaura a simetria de defesa em camadas que a própria migration da 6.3 argumenta no bloco (e)."
+  - owner: "owner do produto"
+    action: "Clique manual na página pública e no dashboard de analytics antes do merge — barato, fecha o concern #6."
