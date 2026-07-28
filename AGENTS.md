@@ -63,3 +63,13 @@ Interprete os atalhos abaixo carregando o arquivo correspondente em `.aiox-core/
 - `@squad-creator`, `/squad-creator`, `/squad-creator.md` -> `.aiox-core/development/agents/squad-creator.md`
 - `@aiox-master`, `/aiox-master`, `/aiox-master.md` -> `.aiox-core/development/agents/aiox-master.md`
 <!-- AIOX-MANAGED-END: shortcuts -->
+
+## Operações — Reprovisionamento de ambientes
+
+Se for necessário **recriar os ambientes do zero** (projetos Supabase dev/prod e/ou o
+projeto Vercel) — por exemplo depois de deletá-los —, **NÃO improvise**: siga o runbook
+passo a passo em [`docs/ops/reprovisioning.md`](docs/ops/reprovisioning.md). Ele traz a
+ordem correta (criar projetos → aplicar migrations → config de auth → secrets do GitHub →
+env vars da Vercel → deploy → verificação), a tabela completa de credenciais (onde cada
+uma vive) e as armadilhas conhecidas — em especial que `RATE_LIMIT_PEPPER` é secret de
+**repositório** (não de environment), sem o qual as migrations não aplicam.

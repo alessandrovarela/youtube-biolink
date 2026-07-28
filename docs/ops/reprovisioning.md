@@ -244,3 +244,9 @@ Para o `.env.local` (dev local): `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABA
 
 5. **Confirmação de e-mail está ON** (`enable_confirmations = true`). O signup precisa do
    clique no e-mail. Sem SMTP customizado, é o e-mail built-in do Supabase.
+
+6. **Se o `migrate-production` falhar com `Failed to resolve latest Supabase CLI release:
+   rate limit exceeded`** — é uma flake TRANSITÓRIA da API do GitHub baixando o CLI, não um
+   problema do teu banco/código. As migrations nem foram tentadas. Basta re-rodar:
+   `gh run rerun <run-id> --failed`. O `ci.yml` já pina a versão do CLI (`version: 2.75.0`)
+   justamente para minimizar isso; se quiser um CLI mais novo, bump o pin conscientemente.

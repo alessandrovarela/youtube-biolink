@@ -92,7 +92,10 @@ jobs:
 
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          # Versão PINADA (não `latest`): resolver `latest` faz uma chamada à API do
+          # GitHub que sofre rate limit e derruba o CD de forma transitória. Pinar
+          # evita a resolução. Atualize conscientemente quando quiser um CLI mais novo.
+          version: 2.75.0
 
       - name: Link & push migrations to production
         env:
