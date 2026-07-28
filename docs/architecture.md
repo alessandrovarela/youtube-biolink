@@ -35,6 +35,14 @@ O documento assume um **princípio orientador explícito**: *simplificar camadas
 
 **Jamstack minimalista** com Next.js 16 (App Router + RSC + Server Actions) na Vercel e Supabase como BaaS (Postgres + Auth). Toda a autenticação e autorização vivem na **camada de aplicação**: Server Actions carregam `user` via cookies e aplicam o filtro `profile_id = user.id` em leituras/mutações. A comunicação client↔server é feita exclusivamente por **Server Actions + RSC** — não há REST/GraphQL, não há middleware de edge, não há RLS no banco. Código roda em um único `components/` flat e valida inputs inline com checks TS diretos.
 
+> **Atualizado pelo Epic 6.** O parágrafo acima descreve o paradigma do MVP; dois pontos
+> mudaram no Epic 6 (Segurança & Hardening) sem alterar o modelo de comunicação. (1) **RLS**
+> foi habilitada nas 3 tabelas (`profiles`, `links`, `link_clicks`; Stories 6.1–6.3) como
+> **defense-in-depth** sobre a authz da camada de aplicação, que **permanece** o mecanismo
+> primário. (2) Um **proxy de borda** (`proxy.ts`, Story 6.5) foi introduzido para auth
+> guard + CSP. A comunicação client↔server **continua exclusivamente por Server Actions +
+> RSC** — o proxy não expõe REST/GraphQL nem participa da resolução de rotas.
+
 ### 2.2 Platform and Infrastructure Choice
 
 **Platform:** Vercel + Supabase Cloud
@@ -87,7 +95,7 @@ graph TB
 - **BaaS:** Supabase concentra Postgres + Auth. — _Rationale:_ elimina boilerplate de REST/GraphQL, ensina o padrão dominante.
 - **Server-First Rendering:** RSC + Server Actions por default; Client Components só para interatividade. — _Rationale:_ secrets no server, menos JS no client, padrão idiomático Next.js 16.
 - **Application-Layer Authorization:** Server Actions chamam `supabase.auth.getUser()` e filtram queries por `user.id`. Sem RLS no MVP. — _Rationale:_ a autorização fica visível no código TS, fácil de ler e discutir em um tutorial. RLS é apresentado depois como camada de defesa em profundidade.
-- **Auth Guard via Layout:** `app/dashboard/layout.tsx` verifica user e chama `redirect('/login')` se ausente. — _Rationale:_ substitui middleware edge com um mecanismo Next.js idiomático e visível no diretório.
+- **Auth Guard via Layout:** `app/dashboard/layout.tsx` verifica user e chama `redirect('/login')` se ausente. — _Rationale:_ substitui middleware edge com um mecanismo Next.js idiomático e visível no diretório. _(**Atualizado pelo Epic 6, Story 6.5:** o proxy de borda `proxy.ts` **adicionou** um auth guard na borda **por cima** deste guard de layout — defense-in-depth. O guard de layout **não foi removido**: continua sendo a verificação idiomática no diretório, agora com uma primeira barreira na borda antes de a request chegar ao RSC.)_
 - **Reserved-list Routing:** `app/[username]/page.tsx` cobre a página pública; rotas estáticas (`/login`, `/dashboard`, `/signup`) vencem por precedência do App Router, e a lista de reservados (Story 2.3) bloqueia registros conflitantes. — _Rationale:_ não precisamos de middleware rewrite — o framework resolve.
 - **Inline Validation:** checks TS diretos (`typeof`, `.length`, `.startsWith`) + helpers puros onde a lógica é reutilizável (`sanitizeLinkUrl`, `validateUsername`). — _Rationale:_ zero dependência extra; validação legível para quem está aprendendo o básico.
 - **Flat Components:** tudo em `components/` sem split `ui/` vs `features/`. — _Rationale:_ volume do MVP (~15 componentes) não justifica ceremony de organização.
@@ -1025,7 +1033,7 @@ Pós-simplificação (v0.2) + DDL concreta embutida (§ 9 em v0.3), não há esc
 | Item removido                     | Motivo                                                               | Quando reintroduzir                                   |
 |-----------------------------------|----------------------------------------------------------------------|------------------------------------------------------|
 | **RLS em todas as tabelas**       | Alta carga conceitual para começar; autorização app-layer é mais legível em tutorial | Epic dedicado "Segurança em Camadas" após Epic 3 |
-| **Middleware Edge (`middleware.ts`)** | Layout-based guard é mais idiomático Next.js 16 e visível no diretório | Quando a lição for "edge runtime + rewrites"     |
+| **Middleware Edge (`middleware.ts`)** | Layout-based guard é mais idiomático Next.js 16 e visível no diretório | ✅ **Reintroduzido no Epic 6 (Story 6.5)** como `proxy.ts` — auth guard de borda + CSP, defense-in-depth sobre o guard de layout (renomeado de `middleware.ts` em TD-6). Sem rewrites. |
 | **Rate limiting (tabela + RPC)**  | Não crítico em MVP didático; merece seu próprio capítulo             | Epic "Hardening & Abuse Prevention" pós-MVP         |
 | **`withActionLogging` + JSON structured logs** | `console.error` basta; observabilidade estruturada merece capítulo com Sentry | Phase 2, junto com Sentry                          |
 | **Split `components/ui` vs `components/features`** | Volume (~15 componentes) não justifica; flat é mais didático         | Quando passar de ~30 componentes                     |
