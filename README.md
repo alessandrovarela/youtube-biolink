@@ -138,6 +138,7 @@ youtube-biolink/
 - [ADRs de Arquitetura](docs/architecture/) — decisões registradas, incl. [segurança do Epic 6](docs/architecture/security-epic-6.md) e [dívida técnica](docs/architecture/technical-debt.md)
 - [Retrospectivas](docs/retrospectives/) — lições de cada epic
 - [Smoke Test Manual](docs/smoke-test.md) — roteiro de validação ponta a ponta (MVP + Epic 6)
+- [Runbook de Reprovisionamento](docs/ops/reprovisioning.md) — recolocar Supabase + Vercel no ar do zero
 - [Stories](docs/stories/) — material didático organizado por epic
 
 ---
